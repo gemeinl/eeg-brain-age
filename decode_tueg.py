@@ -129,7 +129,6 @@ def decode_tueg(
     logger.setLevel(level)
     logger.info(f'\n{config.sort_index()}')
 
-    test_name = 'valid' if final_eval == 0 else 'eval'
     # check if GPU is available, if True chooses to use it
     cuda = torch.cuda.is_available()
     if not cuda:
@@ -147,12 +146,8 @@ def decode_tueg(
         tmin,
         tmax,
         n_jobs, 
-        window_size_samples,
         final_eval,
         valid_set_i,
-        shuffle_data_before_split, 
-        split_kind,
-        test_name,
         seed,
     )
     title = create_title(
@@ -175,7 +170,7 @@ def decode_tueg(
         out_dir,
         tuabn_train.description,
         tuabn_valid.description,
-        test_name,
+        test_name(final_eval),
     )
     ch_names = tuabn_train.datasets[0].raw.ch_names
     sfreq = tuabn_train.datasets[0].raw.info['sfreq']
@@ -201,7 +196,7 @@ def decode_tueg(
         n_jobs,
         preload,
         n_preds_per_input,
-        test_name,
+        test_name(final_eval),
     )
     tuabn_train, tuabn_valid, target_transform, data_transform = standardize(
         standardize_data, 
@@ -217,7 +212,7 @@ def decode_tueg(
         target_transform,
         intuitive_training_scores,
         fast_mode,
-        test_name,
+        test_name(final_eval),
         out_dir,
     )
     estimator = get_estimator(
@@ -247,31 +242,52 @@ def decode_tueg(
     logger.info(f'starting training')
     estimator.fit(tuabn_train, y=None)
     logger.info(f'finished training')
-    make_final_predictions(
+    # generate simple output
+    df = pd.DataFrame(estimator.history)
+    df.to_csv(os.path.join(out_dir, 'history.csv'))
+    with open(os.path.join(out_dir, 'data_scaler.pkl'), 'wb') as f:
+        pickle.dump(data_transform, f)
+    with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
+        pickle.dump(target_transform, f)
+    # TODO: compute manually and save preds? will be needed for post-hoc analysis anyways
+    scores = create_final_scores(
         estimator,
         tuabn_train,
         tuabn_valid,
-        out_dir,
-        test_name,
-    )
-    logger.info(f'made final predictions')
-    generate_outputs(
+        test_name(final_eval),
         target_name,
-        intuitive_training_scores,
-        tuabn_valid, 
-        data_transform,
         target_transform,
-        tuabn_train,
-        fast_mode,
-        title,
-        out_dir,
-        estimator,
-        test_name,
-        standardize_targets,
-        augmenter,
     )
-    logger.info(f'generated outputs')
-    
+    pd.DataFrame(scores).to_csv(os.path.join(out_dir, 'final_scores.csv'))
+    logger.info(f'made final predictions')
+    fig, ax = plt.subplots(1, 1, figsize=(15,3))
+    ax = plot_learning(
+        df=df,
+        loss_key='loss',
+        loss_name=f'{loss} loss',
+        test_name=test_name(final_eval),
+        ax=ax,
+    )
+    ax.set_title(title)
+    save_fig(fig, out_dir, 'curves')
+    # post-hoc analysis
+    # TODO: plot learning
+#     generate_outputs(
+#         target_name,
+#         intuitive_training_scores,
+#         tuabn_valid, 
+#         data_transform,
+#         target_transform,
+#         tuabn_train,
+#         fast_mode,
+#         title,
+#         out_dir,
+#         estimator,
+#         test_name(final_eval),
+#         standardize_targets,
+#         augmenter,
+#     )
+#     logger.info(f'generated outputs')
 #     predict_longitudinal_datasets(
 #         data_transform,
 #         target_transform,
@@ -284,7 +300,7 @@ def decode_tueg(
 #         n_preds_per_input,
 #         preload,
 #     )
-#     logger.info('done.')
+    logger.info('done.')
 
 
 def add_file_logger(
@@ -365,7 +381,7 @@ def check_input_args(
         raise ValueError(f"Unkown augmentation {augment}.")
     if loss not in ['mse', 'mae', 'log_cosh', 'huber']:
         raise ValueError(f'Unkown loss {loss}')
-    if target_name in ['age', 'age_clf']:
+    if target_name in ['pathological', 'gender', 'age_clf']:
         logger.warning(f"'loss' without effect with this target ({target_name})")
     if squash_outs not in [0, 1]:
         raise ValueError
@@ -374,6 +390,10 @@ def check_input_args(
     if final_eval == 0:
         assert valid_set_i in [0, 1, 2, 3, 4]
 
+
+def test_name(final_eval):
+    return 'valid' if final_eval == 0 else 'eval'
+        
 
 def get_preprocessors(
     tmin,
@@ -446,12 +466,8 @@ def get_datasets(
     tmin,
     tmax,
     n_jobs,
-    window_size_samples,
     final_eval,
     valid_set_i,
-    shuffle_data_before_split,
-    split_kind,
-    test_name,
     seed,
 ):
     logger.debug("indexing files")
@@ -469,11 +485,11 @@ def get_datasets(
         tuabn_train, tuabn_valid = get_train_valid_datasets(tuabn_train, target_name, valid_set_i, seed)
 
     # select normal/abnormal only
-    logger.debug(f"from train ({len(tuabn_train.datasets)}) and {test_name}"
+    logger.debug(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)}) selecting {subset}")
     tuabn_train = subselect(tuabn_train, subset)
     tuabn_valid = subselect(tuabn_valid, subset)
-    logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name}"
+    logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)})")
     
     # reduce number of train recordings
@@ -488,7 +504,7 @@ def get_datasets(
     some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
     logger.debug(f"some preprocessed durations {some_durations}")
     logger.debug(f'train datasets {len(tuabn_train.datasets)}')
-    logger.debug(f'{test_name} datasets {len(tuabn_valid.datasets)}')
+    logger.debug(f'{test_name(final_eval)} datasets {len(tuabn_valid.datasets)}')
     
     # map potentially incompatible targets to appropiate types
     if target_name == 'pathological':
@@ -654,7 +670,7 @@ def _create_windows(
     preload,
     n_preds_per_input,
 ):
-    tuabn = create_fixed_length_windows(
+    return create_fixed_length_windows(
         tuabn,
         window_size_samples=window_size_samples,
         window_stride_samples=window_size_samples-n_preds_per_input,
@@ -666,7 +682,6 @@ def _create_windows(
         reject=None,
         flat=None,
     )
-    return tuabn
 
 
 def create_windows(
@@ -984,7 +999,7 @@ def trial_acc(
     y_pred, y_true = model.predict_trials(X)
     y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
     y_pred = y_pred.argmax(axis=1)
-    return 1 - acc(y_pred, y)
+    return 1 - acc(y_pred, y_true)
 
 
 # TODO: implement a binned acc / mae on classifiction?
@@ -1275,15 +1290,35 @@ def save_log(
         f.writelines(log_contents)
 
         
-def make_final_predictions(
+def create_final_scores(
     estimator,
     tuabn_train,
     tuabn_valid,
-    out_dir,
     test_name,
+    target_name,
+    target_scaler,
 ):
-    y_pred, y_true = estimator.predict_trials(tuabn_valid)
+    scores = {}
+    for ds_name, ds in [('train', tuabn_train), (test_name, tuabn_valid)]:
+        score_name, score = _create_final_scores(estimator, ds, target_name, target_scaler)
+        scores[ds_name] = {score_name: score}
+        logger.info(f"on {ds_name} reached {score:.2f} {score_name}")
+    return scores
 
+
+def _create_final_scores(
+    estimator,
+    ds,
+    target_name,
+    target_scaler,
+):
+    if target_name == 'age':
+        score = trial_age_mae(estimator, ds, None, target_scaler)
+        score_name = 'mae'
+    else:
+        score = 1 - trial_acc(estimator, ds, None)
+        score_name = 'acc'
+    return score_name, score
 
 def generate_outputs(
     target_name,
@@ -1343,9 +1378,9 @@ def generate_outputs(
     logger.debug(f'learning dummy score {dummy_score}')
     fig, ax = plt.subplots(1, 1, figsize=(15,3))
     ax = plot_learning(
-        df=df, 
-        loss_key=loss_key, 
-        loss_name=loss_name, 
+        df=df,
+        loss_key=loss_key,
+        loss_name=loss_name,  # TODO: update loss name to input huber, mae, mse....
         dummy_score=dummy_score,
         dummy_score_name='dummy',
         test_name=test_name,
@@ -1654,7 +1689,7 @@ def plot_thresh_to_acc(
         fig, ax = plt.subplots(1, 1, figsize=(10,2))
     ax.plot(df['thresh'], df['acc'])
     ax.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Chronological – Decoded Age [years]')
+    ax.set_xlabel('Decoded – Chronological Age [years]')
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
@@ -1671,8 +1706,9 @@ def plot_chronological_vs_predicted_age(
     
     if df.pathological.nunique() == 1:
         color = 'b' if 0 in df.pathological.unique() else 'r'
-        color2 = 'c' if 0 in df.pathological.unique() else 'orange'
-        ax.scatter(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), marker='.', s=5, c=color)
+        color2 = 'b' if 0 in df.pathological.unique() else 'r'
+        label = 'non-pathological' if 0 in df.pathological.unique() else 'pathological' 
+        ax.scatter(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), marker='.', s=5, c=color, label=label)
         # plot a trend line
         m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
         ax.plot(df.y_true, m*df.y_true + b, c=color2, label='trend', linewidth=1) 
@@ -1720,22 +1756,22 @@ def plot_joint_scatter(
     grid.ax_joint.plot([0, 0], [0, 100], c='k')
     grid.ax_joint.plot([0, 100], [100, 100], c='k')
     grid.ax_joint.plot([100, 100], [0, 100], c='k')
-    grid.ax_joint.set_xlabel('Predicted age [years]')
+    grid.ax_joint.set_xlabel('Decoded age [years]')
     grid.ax_joint.set_ylabel('Chronological age [years]')
     #save_fig(fig, os.path.join(in_dir, 'plots'), 'jointplot')
     return grid
     
     
 def plot_age_gap_hist(
-    all_preds_df,
+    df,
     ax=None,
 ):
+    df['gap'] = df.y_pred - df.y_true
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
-    ax = sns.histplot(data=all_preds_df, x='gap', hue='pathological', kde=True, ax=ax, binwidth=5)
-    ax.set_xlabel('Chronological age - Predicted age [years]')
+    ax = sns.histplot(data=df, x='gap', hue='pathological', kde=True, ax=ax, binwidth=5)
+    ax.set_xlabel('Decoded age - Chronological age [years]')
     ax.set_title(f'Brain age gap')
-    #savefig(fig, os.path.join(in_dir, 'plots'), 'gap_hist')
     return ax
 
 
@@ -1793,5 +1829,6 @@ if __name__ == "__main__":
         raise ValueError(f'There are unknown input parameters: {unknown}')
 
     run_name = args.pop('run_name')
+    logger.info(f"This is run {run_name}")
     # run the actual code
     decode_tueg(**args, config=s)
