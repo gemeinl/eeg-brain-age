@@ -23,6 +23,7 @@ import torch
 import numpy as np
 import pandas as pd
 import seaborn as sns
+sns.set_color_codes('deep')
 import matplotlib.pyplot as plt
 plt.style.use('seaborn')
 plt.set_loglevel('ERROR')
@@ -249,7 +250,6 @@ def decode_tueg(
         pickle.dump(data_transform, f)
     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
         pickle.dump(target_transform, f)
-    # TODO: compute manually and save preds? will be needed for post-hoc analysis anyways
     scores = create_final_scores(
         estimator,
         tuabn_train,
@@ -258,7 +258,7 @@ def decode_tueg(
         target_name,
         target_transform,
     )
-    pd.DataFrame(scores).to_csv(os.path.join(out_dir, 'final_scores.csv'))
+    pd.DataFrame(scores).to_csv(os.path.join(out_dir, 'train_end_scores.csv'))
     logger.info(f'made final predictions')
     fig, ax = plt.subplots(1, 1, figsize=(15,3))
     ax = plot_learning(
@@ -931,6 +931,7 @@ def trial_age_mae(
     X,
     y,
     target_scaler,
+    return_y_yhat,
 ):
     return age_mae(
         model=model,
@@ -938,6 +939,7 @@ def trial_age_mae(
         y=y,
         target_scaler=target_scaler,
         trialwise=True,
+        return_y_yhat=return_y_yhat,
     )
 
 
@@ -946,6 +948,7 @@ def window_age_mae(
     X,
     y,
     target_scaler,
+    return_y_yhat,
 ):
     return age_mae(
         model=model,
@@ -953,6 +956,7 @@ def window_age_mae(
         y=y,
         target_scaler=target_scaler,
         trialwise=False,
+        return_y_yhat=return_y_yhat,
     )
 
 
@@ -962,6 +966,8 @@ def age_mae(
     y,
     target_scaler,
     trialwise,
+    return_y_yhat,
+    
 ):
     """Custom scoring that inverts the target scaling, such that it gives intuitively 
     understandable age mae scores."""
@@ -972,34 +978,43 @@ def age_mae(
         y_pred = model.predict(X)
     y_true = target_scaler.invert(y_true)
     y_pred = target_scaler.invert(y_pred)
-    return float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
+    mae = float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
+    if return_y_yhat:
+        return {'score_name': 'mae', 'score': mae, 'y_true': y_true, 'y_pred': y_pred}
+    return {'score_name': 'mae', 'score': mae}
 
 
 def acc(
-    y_pred,
     y_true,
+    y_pred,
+    return_y_yhat,
 ):
-    return balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
+    score = 1 - balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
+    if return_y_yhat:
+        return {'score_name': 'acc', 'score': score, 'y_true': y_true, 'y_pred': y_pred}
+    return {'score_name': 'acc', 'score': mae}
 
 
 def window_acc(
     model,
     X,
     y,
+    return_y_yhat,
 ):
     y_pred = model.predict(X)
-    return 1 - acc(y_pred, y)
+    return acc(y, y_pred, return_y_yhat)
 
 
 def trial_acc(
     model,
     X,
     y,
+    return_y_yhat,
 ):
     y_pred, y_true = model.predict_trials(X)
     y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
     y_pred = y_pred.argmax(axis=1)
-    return 1 - acc(y_pred, y_true)
+    return acc(y_true, y_pred, return_y_yhat)
 
 
 # TODO: implement a binned acc / mae on classifiction?
@@ -1298,27 +1313,29 @@ def create_final_scores(
     target_name,
     target_scaler,
 ):
-    scores = {}
+    scores = []
     for ds_name, ds in [('train', tuabn_train), (test_name, tuabn_valid)]:
-        score_name, score = _create_final_scores(estimator, ds, target_name, target_scaler)
-        scores[ds_name] = {score_name: score}
-        logger.info(f"on {ds_name} reached {score:.2f} {score_name}")
+        score = _create_final_scores(estimator, ds, ds_name, target_name, target_scaler)
+        score['split'] = ds_name
+        scores.append(score)
+        logger.info(f"on {score['ds_name']} reached {score['score']:.2f} {score['score_name']}")
     return scores
 
 
 def _create_final_scores(
     estimator,
     ds,
+    ds_name,
     target_name,
     target_scaler,
+    return_y_yhat,
 ):
     if target_name == 'age':
-        score = trial_age_mae(estimator, ds, None, target_scaler)
-        score_name = 'mae'
+        score = trial_age_mae(estimator, ds, None, target_scaler, return_y_yhat)
     else:
-        score = 1 - trial_acc(estimator, ds, None)
-        score_name = 'acc'
-    return score_name, score
+        score = trial_acc(estimator, ds, None, return_y_yhat)
+    return score
+
 
 def generate_outputs(
     target_name,
@@ -1666,10 +1683,9 @@ def plot_thresh_to_acc(
     ax=None,
     dummy=None,
 ):
-    #colors = {'pathological': 'r', 'normal': 'b'}
     # if we only decode normals or abnormals, this will raise 
-    if df.pathological.nunique() == 1:
-        warnings.filterwarnings("ignore", message="y_pred contains classes not")
+    #if df.pathological.nunique() == 1:
+    #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
     sorted_gaps = (df['y_true'] - df['y_pred']).sort_values().to_numpy()
     gaps = df['y_true'] - df['y_pred']
     
@@ -1681,21 +1697,20 @@ def plot_thresh_to_acc(
         accs.append(
             balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
         )
-    df = pd.DataFrame([sorted_gaps, accs]).T
-    df.columns = ['thresh', 'acc']
+    df = pd.DataFrame([sorted_gaps, accs, y_true]).T
+    df.columns = ['thresh', 'acc', 'pathological']
     df['acc'] *= 100
     
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(10,2))
-    ax.plot(df['thresh'], df['acc'])
+    ax.plot(df['thresh'], df['acc'], c='b' if 0 in df.pathological.unique() else 'g')  # does not make sense in mixed case
     ax.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Decoded – Chronological Age [years]')
+    ax.set_xlabel('Decoded Age – Chronological Age [years]')
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
 
 
-# TODO: plot_chronological_vs_predicted_age, plot_joint_scatter, plot_age_gap_hist should all accept the same input df
 def plot_chronological_vs_predicted_age(
     df,
     dummy=None,
@@ -1743,22 +1758,40 @@ def plot_chronological_vs_predicted_age(
 def plot_joint_scatter(
     all_preds_df,
 ):
-    grid = sns.jointplot(data=all_preds_df, x='y_pred', y='y_true', hue='pathological', alpha=.75, height=10)
-    sns.scatterplot(
-        data=all_preds_df.groupby('pathological', as_index=False).mean(),  # median looks better
-        ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
-        edgecolor='black', s=100, legend=False, alpha=.75,
-    )
-    grid.ax_joint.set_xlim(-25, 125)
-    grid.ax_joint.set_ylim(-25, 125)
+    grid = sns.jointplot(data=all_preds_df, x='y_pred', y='y_true', hue='pathological', alpha=.75, height=4.85)
+#     sns.scatterplot(
+#         data=all_preds_df.groupby('pathological', as_index=False).mean(),  # median looks better
+#         ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
+#         edgecolor='black', s=100, legend=False, alpha=.75,
+#     )
+    df = all_preds_df[all_preds_df.pathological]
+    if not df.empty:
+        m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
+        grid.ax_joint.plot(df.y_true, m*df.y_true + b, label='trend', linewidth=1, c='g')
+        sns.scatterplot(
+            data=df.groupby('pathological', as_index=False).mean(),  # median looks better
+            ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
+            edgecolor='black', s=100, legend=False, alpha=.75, palette=['g'],
+        )
+    df = all_preds_df[~all_preds_df.pathological]
+    if not df.empty:
+        m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
+        grid.ax_joint.plot(df.y_true, m*df.y_true + b, label='trend', linewidth=1, c='b')
+        sns.scatterplot(
+            data=df.groupby('pathological', as_index=False).mean(),  # median looks better
+            ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
+            edgecolor='black', s=100, legend=False, alpha=.75, palette=['b'],
+        )
+    
+    #grid.ax_joint.set_xlim(-25, 125)
+    #grid.ax_joint.set_ylim(-25, 125)
     grid.ax_joint.plot([0,100],[0,100], c='m', linestyle='--')
-    grid.ax_joint.plot([0, 100], [0, 0], c='k')
-    grid.ax_joint.plot([0, 0], [0, 100], c='k')
-    grid.ax_joint.plot([0, 100], [100, 100], c='k')
-    grid.ax_joint.plot([100, 100], [0, 100], c='k')
+    #grid.ax_joint.plot([0, 100], [0, 0], c='k')
+    #grid.ax_joint.plot([0, 0], [0, 100], c='k')
+    #grid.ax_joint.plot([0, 100], [100, 100], c='k')
+    #grid.ax_joint.plot([100, 100], [0, 100], c='k')
     grid.ax_joint.set_xlabel('Decoded age [years]')
     grid.ax_joint.set_ylabel('Chronological age [years]')
-    #save_fig(fig, os.path.join(in_dir, 'plots'), 'jointplot')
     return grid
     
     
@@ -1769,7 +1802,11 @@ def plot_age_gap_hist(
     df['gap'] = df.y_pred - df.y_true
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
-    ax = sns.histplot(data=df, x='gap', hue='pathological', kde=True, ax=ax, binwidth=5)
+    ax = sns.histplot(data=df, x='gap', 
+                      hue='pathological' if df.pathological.nunique() != 1 else None,
+                      #stat='percent', 
+                      color='b' if 0 in df.pathological.unique() else 'g',
+                      ax=ax, kde=True)#, ax=ax, binwidth=5)
     ax.set_xlabel('Decoded age - Chronological age [years]')
     ax.set_title(f'Brain age gap')
     return ax
