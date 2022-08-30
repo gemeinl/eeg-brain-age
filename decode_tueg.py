@@ -258,6 +258,10 @@ def decode_tueg(
         target_name,
         target_transform,
     )
+    # TODO: save the scores / preds
+    for ds_name in scores['ds_name']:
+        preds = {k: scores[k] for k in ['y_true', 'y_pred']}
+        scores = {k: scores[k] for k in []}
     pd.DataFrame(scores).to_csv(os.path.join(out_dir, 'train_end_scores.csv'))
     logger.info(f'made final predictions')
     fig, ax = plt.subplots(1, 1, figsize=(15,3))
@@ -1600,6 +1604,79 @@ def predict_longitudinal_dataset(
         preds = clf.predict(ds)
     preds = [target_scaler.invert(p) for p in preds]
     return preds
+
+
+def load_exp(
+    base_dir, 
+    exp, 
+    checkpoint,
+):
+    with open(os.path.join(base_dir, exp, f'checkpoint/{checkpoint}_model.pkl'), 'rb') as f:
+        clf = pickle.load(f)
+    with open(os.path.join(base_dir, exp, 'data_scaler.pkl'), 'rb') as f:
+        data_scaler = pickle.load(f)
+    with open(os.path.join(base_dir, exp, 'target_scaler.pkl'), 'rb') as f:
+        target_scaler = pickle.load(f)
+    config = pd.read_csv(os.path.join(base_dir, exp, 'config.csv'), index_col=0).squeeze()
+    return clf, data_scaler, target_scaler, config
+
+
+# TODO: integrate in predict_longitudinal_dataset
+def _predict_ds(
+    clf,
+    d, 
+    trialwise=True,
+    average=True,
+):
+    if not trialwise or not average:
+        raise NotImplementedError
+    preds, targets = clf.predict_trials(d)
+#     print('in _predict_ds before', preds[0].shape, targets.shape)
+    preds = np.array([p.mean(axis=-1).squeeze() for p in preds])
+#     print('in _predict_ds after', preds.shape, targets.shape)
+    if hasattr(d, 'target_transform'):
+        preds = d.target_transform.invert(preds)
+        targets = d.target_transform.invert(targets)
+    return preds, targets
+
+
+# TODO: merge with predict_longitudinal_dataset
+def predict_ds(
+    clf,
+    ds, 
+    mapping, 
+    target_scaler,
+    data_scaler, 
+    n_channels, 
+    window_size_samples,
+    n_preds_per_input,
+    n_jobs,
+    preload,
+    mem_efficient,
+):
+    ds = _create_windows(
+        mapping,
+        ds,
+        window_size_samples,
+        n_channels,
+        n_jobs,
+        preload,
+        n_preds_per_input,
+    )
+    if mem_efficient:
+        splits = ds.split([[i] for i in list(range(len(ds.datasets)))])
+    else:
+        splits = {'0': ds}
+    all_preds, all_targets = [], []
+    for d_i, d in splits.items():
+        d.target_transform = target_scaler
+        d.transform = data_scaler
+        preds, targets = _predict_ds(clf, d)
+        all_preds.append(preds)
+        all_targets.append(targets)
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+    return all_preds, all_targets
 
 
 def plot_learning(
