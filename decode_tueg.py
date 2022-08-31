@@ -257,13 +257,20 @@ def decode_tueg(
         test_name(final_eval),
         target_name,
         target_transform,
+        return_y_yhat=True,
     )
-    # TODO: save the scores / preds
-    for ds_name in scores['ds_name']:
-        preds = {k: scores[k] for k in ['y_true', 'y_pred']}
-        scores = {k: scores[k] for k in []}
-    pd.DataFrame(scores).to_csv(os.path.join(out_dir, 'train_end_scores.csv'))
+    pred_path = os.path.join(out_dir, 'preds')
+    if not os.path.exists(pred_path):
+        os.makedirs(pred_path)
+    this_scores = {}
+    for ds_name, score in scores.items():
+        preds = {k: score[k] for k in ['y_true', 'y_pred']}
+        this_scores[ds_name] = {score['score_name']: score['score']}
+        # TODO: add window preds?
+        pd.DataFrame(preds).to_csv(os.path.join(pred_path, f'train_end_{ds_name}_preds.csv'))
+    pd.DataFrame(this_scores).to_csv(os.path.join(out_dir, f'train_end_scores.csv'))
     logger.info(f'made final predictions')
+    # plot learning
     fig, ax = plt.subplots(1, 1, figsize=(15,3))
     ax = plot_learning(
         df=df,
@@ -383,10 +390,10 @@ def check_input_args(
         'identity',
     ]:
         raise ValueError(f"Unkown augmentation {augment}.")
-    if loss not in ['mse', 'mae', 'log_cosh', 'huber']:
+    if loss not in ['mse', 'mae', 'log_cosh', 'huber', 'nll']:
         raise ValueError(f'Unkown loss {loss}')
-    if target_name in ['pathological', 'gender', 'age_clf']:
-        logger.warning(f"'loss' without effect with this target ({target_name})")
+    if target_name in ['pathological', 'gender', 'age_clf'] and loss != 'nll':
+        logger.warning(f"loss '{loss}' cannot be used with this target ({target_name})")
     if squash_outs not in [0, 1]:
         raise ValueError
     if squash_outs == 1 and target_name != 'age':
@@ -984,7 +991,7 @@ def age_mae(
     y_pred = target_scaler.invert(y_pred)
     mae = float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
     if return_y_yhat:
-        return {'score_name': 'mae', 'score': mae, 'y_true': y_true, 'y_pred': y_pred}
+        return {'score_name': 'mae', 'score': mae, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
     return {'score_name': 'mae', 'score': mae}
 
 
@@ -993,9 +1000,9 @@ def acc(
     y_pred,
     return_y_yhat,
 ):
-    score = 1 - balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
+    score = balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
     if return_y_yhat:
-        return {'score_name': 'acc', 'score': score, 'y_true': y_true, 'y_pred': y_pred}
+        return {'score_name': 'acc', 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
     return {'score_name': 'acc', 'score': mae}
 
 
@@ -1139,17 +1146,16 @@ def get_estimator(
         model.cuda()
 
     # in case of age try l1_loss?
-    if target_name != 'age':
+    if loss == 'nll':
         loss_function = torch.nn.functional.nll_loss
-    else:
-        if loss == 'mse':
-            loss_function = torch.nn.functional.mse_loss
-        elif loss == 'mae':
-            loss_function = torch.nn.functional.l1_loss
-        elif loss == 'log_cosh':
-            loss_function = log_cosh_loss
-        elif loss == 'huber':
-            loss_function = torch.nn.functional.huber_loss
+    elif loss == 'mse':
+        loss_function = torch.nn.functional.mse_loss
+    elif loss == 'mae':
+        loss_function = torch.nn.functional.l1_loss
+    elif loss == 'log_cosh':
+        loss_function = log_cosh_loss
+    elif loss == 'huber':
+        loss_function = torch.nn.functional.huber_loss
     Estimator = EEGRegressor if target_name == 'age' else EEGClassifier
     estimator = Estimator(
         model,
@@ -1308,7 +1314,7 @@ def save_log(
     with open(os.path.join(out_dir, 'log.txt'), 'w') as f:
         f.writelines(log_contents)
 
-        
+
 def create_final_scores(
     estimator,
     tuabn_train,
@@ -1316,13 +1322,20 @@ def create_final_scores(
     test_name,
     target_name,
     target_scaler,
+    return_y_yhat,
 ):
-    scores = []
+    scores = {}
     for ds_name, ds in [('train', tuabn_train), (test_name, tuabn_valid)]:
-        score = _create_final_scores(estimator, ds, ds_name, target_name, target_scaler)
-        score['split'] = ds_name
-        scores.append(score)
-        logger.info(f"on {score['ds_name']} reached {score['score']:.2f} {score['score_name']}")
+        score = _create_final_scores(
+            estimator,
+            ds,
+            ds_name,
+            target_name,
+            target_scaler,
+            return_y_yhat,
+        )
+        scores[ds_name] = score
+        logger.info(f"on {ds_name} reached {scores[ds_name]['score']:.2f} {scores[ds_name]['score_name']}")
     return scores
 
 
@@ -1334,10 +1347,22 @@ def _create_final_scores(
     target_scaler,
     return_y_yhat,
 ):
+    # TODO: instead of trial_age_mae / trial_acc use predict_ds and age_mae / acc
     if target_name == 'age':
-        score = trial_age_mae(estimator, ds, None, target_scaler, return_y_yhat)
+        score = trial_age_mae(
+            estimator,
+            ds,
+            None,
+            target_scaler,
+            return_y_yhat,
+        )
     else:
-        score = trial_acc(estimator, ds, None, return_y_yhat)
+        score = trial_acc(
+            estimator,
+            ds,
+            None,
+            return_y_yhat,
+        )
     return score
 
 
@@ -1536,7 +1561,7 @@ def predict_longitudinal_datasets(
             with open(ds_path, 'rb') as f:
                 ds = pickle.load(f)
             logger.debug(f"from model at {point} predicting longitudinal {kind}")
-            trial_preds = predict_longitudinal_dataset(
+            trial_preds, trial_targets = predict_ds(
                 clf,
                 ds,
                 data_scaler,
@@ -1557,53 +1582,42 @@ def predict_longitudinal_datasets(
             # TODO: plot_joint_scatter, plot_age_gap_hist
 
 
-def predict_longitudinal_dataset(
-    clf,
-    ds,
-    data_scaler,
-    target_scaler,
-    tmin,
-    tmax,
-    n_jobs,
-    window_size_samples,
-    n_channels,
-    n_preds_per_input,
-    preload,
-    trialwise=True,
-    average=True,
-):
-    # preprocess
-    """
-    ds = _preprocess(
-        ds,
-        tmin,
-        tmax,
-        n_jobs,
-    )
-    """
-    # create windows
-    ds = _create_windows(
-        mapping=None,
-        tuabn=ds,
-        window_size_samples=window_size_samples,
-        n_channels=n_channels,
-        n_jobs=n_jobs,
-        preload=preload,
-        n_preds_per_input=n_preds_per_input,
-    )
-    # set data and target scaling transform
-    ds.transform = data_scaler
-    ds.target_transform = target_scaler
+# def predict_longitudinal_dataset(
+#     clf,
+#     ds,
+#     data_scaler,
+#     target_scaler,
+#     n_jobs,
+#     window_size_samples,
+#     n_channels,
+#     n_preds_per_input,
+#     preload,
+#     trialwise=True,
+#     average=True,
+# ):
+#     # create windows
+#     ds = _create_windows(
+#         mapping=None,
+#         tuabn=ds,
+#         window_size_samples=window_size_samples,
+#         n_channels=n_channels,
+#         n_jobs=n_jobs,
+#         preload=preload,
+#         n_preds_per_input=n_preds_per_input,
+#     )
+#     # set data and target scaling transform
+#     ds.transform = data_scaler
+#     ds.target_transform = target_scaler
 
-    # make trialswise predictions
-    if trialwise:
-        preds = clf.predict_trials(ds, return_targets=False)
-        if average:
-            preds = [np.mean(p, axis=-1).item() for p in preds]
-    else:
-        preds = clf.predict(ds)
-    preds = [target_scaler.invert(p) for p in preds]
-    return preds
+#     # make trialswise predictions
+#     if trialwise:
+#         preds = clf.predict_trials(ds, return_targets=False)
+#         if average:
+#             preds = [np.mean(p, axis=-1).item() for p in preds]
+#     else:
+#         preds = clf.predict(ds)
+#     preds = [target_scaler.invert(p) for p in preds]
+#     return preds
 
 
 def load_exp(
@@ -1621,29 +1635,38 @@ def load_exp(
     return clf, data_scaler, target_scaler, config
 
 
-# TODO: integrate in predict_longitudinal_dataset
+    if trialwise:
+        preds = clf.predict_trials(ds, return_targets=False)
+        if average:
+            preds = [np.mean(p, axis=-1).item() for p in preds]
+    else:
+        preds = clf.predict(ds)
+    preds = [target_scaler.invert(p) for p in preds]
+
+
 def _predict_ds(
     clf,
-    d, 
+    ds, 
     trialwise=True,
-    average=True,
+    average_time_axis=True,
 ):
-    if not trialwise or not average:
-        raise NotImplementedError
-    preds, targets = clf.predict_trials(d)
-#     print('in _predict_ds before', preds[0].shape, targets.shape)
-    preds = np.array([p.mean(axis=-1).squeeze() for p in preds])
-#     print('in _predict_ds after', preds.shape, targets.shape)
-    if hasattr(d, 'target_transform'):
-        preds = d.target_transform.invert(preds)
-        targets = d.target_transform.invert(targets)
+    if trialwise:
+        preds, targets = clf.predict_trials(ds, return_targets=True)
+    else:
+        preds = clf.predict(ds)
+        targets = ds.get_metadata['target'].to_numpy()
+    if average_time_axis:
+        preds = [np.mean(p, axis=-1).item() for p in preds]
+    if hasattr(ds, 'target_transform'):
+        preds = [ds.target_scaler.invert(p) for p in preds]
+        targets = [ds.target_scaler.invert(t) for t in targets]
     return preds, targets
 
 
-# TODO: merge with predict_longitudinal_dataset
 def predict_ds(
     clf,
     ds, 
+    target_name,
     mapping, 
     target_scaler,
     data_scaler, 
@@ -1653,7 +1676,10 @@ def predict_ds(
     n_jobs,
     preload,
     mem_efficient,
+    trialwise=True,
+    average_time_axis=True,
 ):
+    # TODO: change order of _create windows and creating splits?
     ds = _create_windows(
         mapping,
         ds,
@@ -1671,7 +1697,16 @@ def predict_ds(
     for d_i, d in splits.items():
         d.target_transform = target_scaler
         d.transform = data_scaler
-        preds, targets = _predict_ds(clf, d)
+        preds, targets = _predict_ds(
+            clf,
+            d,
+            trialwise=trialwise,
+            average_time_axis=average_time_axis,
+        )
+        # get class label from predictions
+        if target_name != 'age':
+            print(preds.shape)
+            preds = np.argmax(preds, axis=-1)
         all_preds.append(preds)
         all_targets.append(targets)
     all_preds = np.concatenate(all_preds, axis=0)
