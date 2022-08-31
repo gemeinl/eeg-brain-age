@@ -186,8 +186,11 @@ def decode_tueg(
         window_size_samples,
         squash_outs,
     )
-    n_preds_per_input = model(torch.ones(1, n_channels, window_size_samples, 1)).size()[2]
-    logger.debug(f"model {model_name} produces {n_preds_per_input} preds for every input of size {window_size_samples}")
+    n_preds_per_input = get_n_preds_per_input(
+        model,
+        n_channels,
+        window_size_samples,
+    )
     tuabn_train, tuabn_valid = create_windows(
         mapping, 
         tuabn_train,
@@ -199,7 +202,7 @@ def decode_tueg(
         n_preds_per_input,
         test_name(final_eval),
     )
-    tuabn_train, tuabn_valid, target_transform, data_transform = standardize(
+    tuabn_train, tuabn_valid = standardize(
         standardize_data, 
         standardize_targets,
         tuabn_train,
@@ -210,7 +213,7 @@ def decode_tueg(
         n_epochs, 
         n_restarts,
         target_name,
-        target_transform,
+        tuabn_train.target_transform,
         intuitive_training_scores,
         fast_mode,
         test_name(final_eval),
@@ -247,29 +250,22 @@ def decode_tueg(
     df = pd.DataFrame(estimator.history)
     df.to_csv(os.path.join(out_dir, 'history.csv'))
     with open(os.path.join(out_dir, 'data_scaler.pkl'), 'wb') as f:
-        pickle.dump(data_transform, f)
+        pickle.dump(tuabn_train.transform, f)
     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
-        pickle.dump(target_transform, f)
-    scores = create_final_scores(
+        pickle.dump(tuabn_train.target_transform, f)
+    train_preds, valid_preds, scores = make_final_predictions(
         estimator,
         tuabn_train,
         tuabn_valid,
-        test_name(final_eval),
+        final_eval,
         target_name,
-        target_transform,
-        return_y_yhat=True,
     )
     pred_path = os.path.join(out_dir, 'preds')
     if not os.path.exists(pred_path):
         os.makedirs(pred_path)
-    this_scores = {}
-    for ds_name, score in scores.items():
-        preds = {k: score[k] for k in ['y_true', 'y_pred']}
-        this_scores[ds_name] = {score['score_name']: score['score']}
-        # TODO: add window preds?
-        pd.DataFrame(preds).to_csv(os.path.join(pred_path, f'train_end_{ds_name}_preds.csv'))
-    pd.DataFrame(this_scores).to_csv(os.path.join(out_dir, f'train_end_scores.csv'))
-    logger.info(f'made final predictions')
+    train_preds.to_csv(os.path.join(out_dir, 'preds', f'train_end_train_preds.csv'))
+    valid_preds.to_csv(os.path.join(out_dir, 'preds', f'train_end_{test_name(final_eval)}_preds.csv'))
+    scores.to_csv(os.path.join(out_dir, f'train_end_scores.csv'))
     # plot learning
     fig, ax = plt.subplots(1, 1, figsize=(15,3))
     ax = plot_learning(
@@ -281,36 +277,6 @@ def decode_tueg(
     )
     ax.set_title(title)
     save_fig(fig, out_dir, 'curves')
-    # post-hoc analysis
-    # TODO: plot learning
-#     generate_outputs(
-#         target_name,
-#         intuitive_training_scores,
-#         tuabn_valid, 
-#         data_transform,
-#         target_transform,
-#         tuabn_train,
-#         fast_mode,
-#         title,
-#         out_dir,
-#         estimator,
-#         test_name(final_eval),
-#         standardize_targets,
-#         augmenter,
-#     )
-#     logger.info(f'generated outputs')
-#     predict_longitudinal_datasets(
-#         data_transform,
-#         target_transform,
-#         out_dir, 
-#         tmin,
-#         tmax,
-#         n_jobs,
-#         window_size_samples,
-#         n_channels,
-#         n_preds_per_input,
-#         preload,
-#     )
     logger.info('done.')
 
 
@@ -672,6 +638,16 @@ def get_model(
     return model, lr, weight_decay
 
 
+def get_n_preds_per_input(
+        model,
+        n_channels,
+        window_size_samples,
+    ):
+    n_preds_per_input = model(torch.ones(1, n_channels, window_size_samples, 1)).size()[2]
+    logger.debug(f"model produces {n_preds_per_input} preds for every input of size {window_size_samples}")
+    return n_preds_per_input
+
+
 def _create_windows(
     mapping,
     tuabn,
@@ -901,7 +877,7 @@ def standardize(
     tuabn_train.target_transform = target_transform
     tuabn_valid.target_transform = target_transform
     logger.debug(f'post {kind} target scaling {tuabn_train[0][1]}')
-    return tuabn_train, tuabn_valid, target_transform, data_transform
+    return tuabn_train, tuabn_valid
 
 
 def create_title(
@@ -986,14 +962,24 @@ def age_mae(
         y_pred, y_true = model.predict_trials(X)
         y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
     else:
+        # TODO: average here, too?
         y_pred = model.predict(X)
+    # TODO: derive target_scaler from X?
     y_true = target_scaler.invert(y_true)
     y_pred = target_scaler.invert(y_pred)
-    mae = float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
-    if return_y_yhat:
-        return {'score_name': 'mae', 'score': mae, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
-    return {'score_name': 'mae', 'score': mae}
+    return mae(y_true, y_pred, return_y_yhat)
 
+
+def mae(
+    y_true,
+    y_pred,
+    return_y_yhat,
+):
+    score = float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
+    if return_y_yhat:
+        return {'score_name': 'mae', 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
+    return {'score_name': 'mae', 'score': score}
+    
 
 def acc(
     y_true,
@@ -1003,7 +989,14 @@ def acc(
     score = balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
     if return_y_yhat:
         return {'score_name': 'acc', 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
-    return {'score_name': 'acc', 'score': mae}
+    return {'score_name': 'acc', 'score': score}
+
+
+# def _return_score(score, score_name, y_true=None, y_pred=None):
+#     if y_true is not None and y_pred is not None:
+#         return {'score_name': score_name, 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
+#     else:
+#         return {'score_name': score_name, 'score': score}
 
 
 def window_acc(
@@ -1012,25 +1005,26 @@ def window_acc(
     y,
     return_y_yhat,
 ):
-    y_pred = model.predict(X)
-    return acc(y, y_pred, return_y_yhat)
+    return trial_acc(y, y_pred, trialwise=False, return_y_yhat=return_y_yhat)
 
 
+# TODO: implement a binned acc / mae on classifiction?
 def trial_acc(
     model,
     X,
     y,
+    trialwise,
     return_y_yhat,
 ):
-    y_pred, y_true = model.predict_trials(X)
-    y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
+    if trialwise:
+        y_pred, y_true = model.predict_trials(X)
+        y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
+    else:
+        y_pred = model.predict(X)
     y_pred = y_pred.argmax(axis=1)
     return acc(y_true, y_pred, return_y_yhat)
 
 
-# TODO: implement a binned acc / mae on classifiction?
-    
-    
 def is_before_restart(
     net,
     epoch_i,
@@ -1314,7 +1308,34 @@ def save_log(
     with open(os.path.join(out_dir, 'log.txt'), 'w') as f:
         f.writelines(log_contents)
 
-
+        
+def make_final_predictions(
+    estimator,
+    tuabn_train,
+    tuabn_valid,
+    final_eval,
+    target_name,
+):
+    # TODO: add window preds?
+    scores = create_final_scores(
+        estimator,
+        tuabn_train,
+        tuabn_valid,
+        test_name(final_eval),
+        target_name,
+        tuabn_train.target_transform,
+        return_y_yhat=True,
+    )
+    logger.info(f'made final predictions')
+    this_scores = {}
+    for ds_name, score in scores.items():
+        this_scores[ds_name] = {score['score_name']: score['score']}
+    this_scores = pd.DataFrame(this_scores)
+    train_preds = pd.DataFrame({k: scores['train'][k] for k in ['y_true', 'y_pred']})
+    valid_preds = pd.DataFrame({k: scores[test_name(final_eval)][k] for k in ['y_true', 'y_pred']})
+    return train_preds, valid_preds, this_scores
+    
+    
 def create_final_scores(
     estimator,
     tuabn_train,
@@ -1354,14 +1375,15 @@ def _create_final_scores(
             ds,
             None,
             target_scaler,
-            return_y_yhat,
+            return_y_yhat=return_y_yhat,
         )
     else:
         score = trial_acc(
             estimator,
             ds,
             None,
-            return_y_yhat,
+            trialwise=True,
+            return_y_yhat=return_y_yhat,
         )
     return score
 
