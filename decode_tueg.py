@@ -1306,6 +1306,7 @@ def make_final_predictions(
     n_jobs,
 ):
     # TODO: add window preds?
+    # TODO: add pathological and gender to preds df csv
     scores = create_final_scores(
         estimator,
         tuabn_train,
@@ -1852,6 +1853,37 @@ def plot_joint_scatter(
     #grid.ax_joint.plot([100, 100], [0, 100], c='k')
     grid.ax_joint.set_xlabel('Decoded age [years]')
     grid.ax_joint.set_ylabel('Chronological age [years]')
+    return grid
+
+
+def jointplot(df):
+    grid = sns.JointGrid(height=9)
+    sns.lineplot(x=[0, 100], y=[0, 100], ax=grid.ax_joint, color='magenta', linestyle='--')
+
+    x = 'y_pred'
+    y = 'y_true'
+    hue = 'pathological'
+    max_age = 100
+    for d, c in [(df[~df.pathological], 'black'), (df[df.pathological], 'white')]:
+        sns.scatterplot(data=d, x=x, y=y, ax=grid.ax_joint, ci=None, edgecolor=c, alpha=.8)
+
+    for d in [df[~df.pathological], df[df.pathological]]:
+        m, b = np.polyfit(d.y_true.to_numpy('int'), d.y_pred.to_numpy('float'), 1)
+        grid.ax_joint.plot(m*d.y_true + b, d.y_true, linewidth=1)
+
+    sns.scatterplot(data=df.groupby(hue, as_index=False).mean(), 
+                    x=x, y=y, ax=grid.ax_joint, hue=hue, marker='^', s=200, edgecolor='black')
+
+    sns.histplot(data=df, y=y, ax=grid.ax_marg_y, kde=True, 
+                 hue=hue, legend=None, stat='density', bins=list(range(max_age)))
+    sns.kdeplot(data=df, y=y, ax=grid.ax_marg_y, legend=None, color='black')
+
+    sns.histplot(data=df, x=x, ax=grid.ax_marg_x, kde=True, 
+                 hue=hue, legend=None, stat='density', bins=list(range(max_age)))
+    sns.kdeplot(data=df, x=x, ax=grid.ax_marg_x, legend=None, color='black')
+
+    grid.ax_joint.set_ylabel('Chronological Age [years]')
+    grid.ax_joint.set_xlabel('Decoded Age [years]')
     return grid
     
     
