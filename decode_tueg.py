@@ -259,6 +259,7 @@ def decode_tueg(
         tuabn_valid,
         final_eval,
         target_name,
+        n_jobs,
     )
     pred_path = os.path.join(out_dir, 'preds')
     if not os.path.exists(pred_path):
@@ -1315,6 +1316,7 @@ def make_final_predictions(
     tuabn_valid,
     final_eval,
     target_name,
+    n_jobs,
 ):
     # TODO: add window preds?
     scores = create_final_scores(
@@ -1324,6 +1326,8 @@ def make_final_predictions(
         test_name(final_eval),
         target_name,
         tuabn_train.target_transform,
+        tuabn_train.transform[0],
+        n_jobs,
         return_y_yhat=True,
     )
     logger.info(f'made final predictions')
@@ -1343,18 +1347,27 @@ def create_final_scores(
     test_name,
     target_name,
     target_scaler,
+    data_scaler,
+    n_jobs,
     return_y_yhat,
 ):
     scores = {}
     for ds_name, ds in [('train', tuabn_train), (test_name, tuabn_valid)]:
-        score = _create_final_scores(
+        preds, targets = predict_ds(
             estimator,
-            ds,
-            ds_name,
+            ds, 
             target_name,
             target_scaler,
-            return_y_yhat,
+            data_scaler, 
+            n_jobs,
+            mem_efficient=False,
+            trialwise=True,
+            average_time_axis=True,
         )
+        if target_name == 'age':
+            score = mae(targets, preds, True)
+        else:
+            score = acc(targets, preds, True)
         scores[ds_name] = score
         logger.info(f"on {ds_name} reached {scores[ds_name]['score']:.2f} {scores[ds_name]['score_name']}")
     return scores
@@ -1386,6 +1399,67 @@ def _create_final_scores(
             return_y_yhat=return_y_yhat,
         )
     return score
+
+
+def _predict_ds(
+    clf,
+    ds, 
+    trialwise=True,
+    average_time_axis=True,
+):
+    if trialwise:
+        preds, targets = clf.predict_trials(ds, return_targets=True)
+    else:
+        preds = clf.predict(ds)
+        targets = ds.get_metadata['target'].to_numpy()
+    if average_time_axis:
+        preds = [np.mean(p, axis=-1).squeeze() for p in preds]
+    if hasattr(ds, 'target_transform'):
+        preds = [ds.target_transform.invert(p) for p in preds]
+        targets = [ds.target_transform.invert(t) for t in targets]
+    return preds, targets
+
+
+def generate_splits(n_datasets, n_jobs):
+    n_splits = n_datasets/n_jobs if n_datasets % n_jobs == 0 else n_datasets/n_jobs+1
+    return {str(i): list(b) for i, b in enumerate(np.array_split(list(range(n_datasets)), n_splits))}
+
+
+def predict_ds(
+    clf,
+    ds, 
+    target_name,
+    target_scaler,
+    data_scaler, 
+    n_jobs,
+    mem_efficient,
+    trialwise=True,
+    average_time_axis=True,
+):
+    ds.target_transform = target_scaler
+    ds.transform = data_scaler
+    if mem_efficient:
+        splits = generate_splits(len(ds.datasets), n_jobs)
+        splits = {i: ds.split(ids)['0'] for i, ids in splits.items()}
+    else:
+        splits = {'0': ds}
+    all_preds, all_targets = [], []
+    for d_i, d in splits.items():
+        preds, targets = _predict_ds(
+            clf,
+            d,
+            trialwise=trialwise,
+            average_time_axis=average_time_axis,
+        )
+        # get class label from predictions
+        if target_name != 'age':
+            # TODO: preds currently not an ndarray here
+            preds = np.argmax(preds, axis=-1)
+        all_preds.append(preds)
+        all_targets.append(targets)
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+    return all_preds, all_targets
 
 
 def generate_outputs(
@@ -1583,6 +1657,16 @@ def predict_longitudinal_datasets(
             with open(ds_path, 'rb') as f:
                 ds = pickle.load(f)
             logger.debug(f"from model at {point} predicting longitudinal {kind}")
+            # TODO: only use predict_ds, move windowing here
+            ds = _create_windows(
+                mapping=None,
+                tuabn=ds,
+                window_size_samples=window_size_samples,
+                n_channels=n_channels,
+                n_jobs=n_jobs,
+                preload=preload,
+                n_preds_per_input=n_preds_per_input,
+            )
             trial_preds, trial_targets = predict_ds(
                 clf,
                 ds,
@@ -1655,85 +1739,6 @@ def load_exp(
         target_scaler = pickle.load(f)
     config = pd.read_csv(os.path.join(base_dir, exp, 'config.csv'), index_col=0).squeeze()
     return clf, data_scaler, target_scaler, config
-
-
-    if trialwise:
-        preds = clf.predict_trials(ds, return_targets=False)
-        if average:
-            preds = [np.mean(p, axis=-1).item() for p in preds]
-    else:
-        preds = clf.predict(ds)
-    preds = [target_scaler.invert(p) for p in preds]
-
-
-def _predict_ds(
-    clf,
-    ds, 
-    trialwise=True,
-    average_time_axis=True,
-):
-    if trialwise:
-        preds, targets = clf.predict_trials(ds, return_targets=True)
-    else:
-        preds = clf.predict(ds)
-        targets = ds.get_metadata['target'].to_numpy()
-    if average_time_axis:
-        preds = [np.mean(p, axis=-1).item() for p in preds]
-    if hasattr(ds, 'target_transform'):
-        preds = [ds.target_scaler.invert(p) for p in preds]
-        targets = [ds.target_scaler.invert(t) for t in targets]
-    return preds, targets
-
-
-def predict_ds(
-    clf,
-    ds, 
-    target_name,
-    mapping, 
-    target_scaler,
-    data_scaler, 
-    n_channels, 
-    window_size_samples,
-    n_preds_per_input,
-    n_jobs,
-    preload,
-    mem_efficient,
-    trialwise=True,
-    average_time_axis=True,
-):
-    # TODO: change order of _create windows and creating splits?
-    ds = _create_windows(
-        mapping,
-        ds,
-        window_size_samples,
-        n_channels,
-        n_jobs,
-        preload,
-        n_preds_per_input,
-    )
-    if mem_efficient:
-        splits = ds.split([[i] for i in list(range(len(ds.datasets)))])
-    else:
-        splits = {'0': ds}
-    all_preds, all_targets = [], []
-    for d_i, d in splits.items():
-        d.target_transform = target_scaler
-        d.transform = data_scaler
-        preds, targets = _predict_ds(
-            clf,
-            d,
-            trialwise=trialwise,
-            average_time_axis=average_time_axis,
-        )
-        # get class label from predictions
-        if target_name != 'age':
-            print(preds.shape)
-            preds = np.argmax(preds, axis=-1)
-        all_preds.append(preds)
-        all_targets.append(targets)
-    all_preds = np.concatenate(all_preds, axis=0)
-    all_targets = np.concatenate(all_targets, axis=0)
-    return all_preds, all_targets
 
 
 def plot_learning(
