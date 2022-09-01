@@ -116,7 +116,7 @@ def decode_tueg(
     warnings.filterwarnings("ignore", message="You are using an callback that overrides on_batch_begin or on_batc")
     warnings.filterwarnings("ignore", message="This function was designed to predict trials from cropped datasets")
     #warnings.filterwarnings("ignore", message="UserWarning: y_pred contains classes not in y_true")
-    
+
     check_input_args(
         batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
         model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, out_dir,
@@ -400,11 +400,6 @@ def get_preprocessors(
     return preprocessors
 
 
-def _preprocess(tuabn_train, tmin, tmax, n_jobs):
-    preprocessors = get_preprocessors(tmin, tmax)
-    return preprocess(tuabn_train, preprocessors=preprocessors, n_jobs=n_jobs) 
-
-
 def get_train_eval_datasets(tuabn_train, target_name, seed):
     if target_name in ['age', 'age_clf']:
         logger.debug(f"into train (0.9) and eval (0.1).")
@@ -479,7 +474,10 @@ def get_datasets(
     some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
     logger.debug(f'some raw durations {some_durations}')
     logger.debug("preprocessing")
-    [tuabn_train, tuabn_valid] = [_preprocess(ds, tmin=tmin, tmax=tmax, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]]
+    preprocessors = get_preprocessors(tmin, tmax)
+    [tuabn_train, tuabn_valid] = [
+        preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
+    ]
     some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
     logger.debug(f"some preprocessed durations {some_durations}")
     logger.debug(f'train datasets {len(tuabn_train.datasets)}')
@@ -650,30 +648,6 @@ def get_n_preds_per_input(
     return n_preds_per_input
 
 
-# TODO: remove and use create_fixed_length_windwos directly
-def _create_windows(
-    mapping,
-    tuabn,
-    window_size_samples,
-    n_channels,
-    n_jobs, 
-    preload,
-    n_preds_per_input,
-):
-    return create_fixed_length_windows(
-        tuabn,
-        window_size_samples=window_size_samples,
-        window_stride_samples=window_size_samples-n_preds_per_input,
-        drop_last_window=False,
-        n_jobs=min(n_jobs, 4),
-        preload=bool(preload),
-        mapping=mapping,
-        drop_bad_windows=True,
-        reject=None,
-        flat=None,
-    )
-
-
 def create_windows(
     mapping,
     tuabn_train,
@@ -687,15 +661,19 @@ def create_windows(
 ):
     logger.debug("windowing")
     [tuabn_train, tuabn_valid] = [
-        _create_windows(
-            mapping=mapping,
-            tuabn=ds,
+        create_fixed_length_windows(
+            ds,
             window_size_samples=window_size_samples,
-            n_channels=n_channels,
-            n_jobs=n_jobs,
-            preload=preload,
-            n_preds_per_input=n_preds_per_input,
-        )  for ds in [tuabn_train, tuabn_valid]
+            window_stride_samples=window_size_samples-n_preds_per_input,
+            n_jobs=min(n_jobs, 4),
+            preload=bool(preload),
+            mapping=mapping,
+            drop_last_window=False,
+            drop_bad_windows=True,
+            reject=None,
+            flat=None,
+        )
+        for ds in [tuabn_train, tuabn_valid]
     ]
     logger.debug(f'train windows {len(tuabn_train)}')
     logger.debug(f'{test_name} windows {len(tuabn_valid)}')
@@ -911,9 +889,16 @@ def save_input(
     valid_description,
     test_name,
 ):
-    config.to_csv(os.path.join(out_dir,'config.csv'))
-    train_description.to_csv(os.path.join(out_dir, 'train_description.csv'))
-    valid_description.to_csv(os.path.join(out_dir, f'{test_name}_description.csv'))
+    for df, csv_name in [
+        (config, 'config.csv'),
+        (train_description, 'train_description.csv'),
+        (valid_description, f'{test_name}_description.csv'),
+    ]:
+        save_csv(df, out_dir, csv_name)
+    
+    
+def save_csv(df, out_dir, csv_name):
+    df.to_csv(os.path.join(out_dir, csv_name))
 
 
 def trial_age_mae(
@@ -1375,53 +1360,6 @@ def create_final_scores(
     return scores
 
 
-def _create_final_scores(
-    estimator,
-    ds,
-    ds_name,
-    target_name,
-    target_scaler,
-    return_y_yhat,
-):
-    # TODO: instead of trial_age_mae / trial_acc use predict_ds and age_mae / acc
-    if target_name == 'age':
-        score = trial_age_mae(
-            estimator,
-            ds,
-            None,
-            target_scaler,
-            return_y_yhat=return_y_yhat,
-        )
-    else:
-        score = trial_acc(
-            estimator,
-            ds,
-            None,
-            trialwise=True,
-            return_y_yhat=return_y_yhat,
-        )
-    return score
-
-
-def _predict_ds(
-    clf,
-    ds, 
-    trialwise=True,
-    average_time_axis=True,
-):
-    if trialwise:
-        preds, targets = clf.predict_trials(ds, return_targets=True)
-    else:
-        preds = clf.predict(ds)
-        targets = ds.get_metadata['target'].to_numpy()
-    if average_time_axis:
-        preds = [np.mean(p, axis=-1).squeeze() for p in preds]
-    if hasattr(ds, 'target_transform'):
-        preds = [ds.target_transform.invert(p) for p in preds]
-        targets = [ds.target_transform.invert(t) for t in targets]
-    return preds, targets
-
-
 def generate_splits(n_datasets, n_jobs):
     n_splits = n_datasets/n_jobs if n_datasets % n_jobs == 0 else n_datasets/n_jobs+1
     return {str(i): list(b) for i, b in enumerate(np.array_split(list(range(n_datasets)), n_splits))}
@@ -1462,6 +1400,25 @@ def predict_ds(
     all_preds = np.concatenate(all_preds, axis=0)
     all_targets = np.concatenate(all_targets, axis=0)
     return all_preds, all_targets
+
+
+def _predict_ds(
+    clf,
+    ds, 
+    trialwise=True,
+    average_time_axis=True,
+):
+    if trialwise:
+        preds, targets = clf.predict_trials(ds, return_targets=True)
+    else:
+        preds = clf.predict(ds)
+        targets = ds.get_metadata['target'].to_numpy()
+    if average_time_axis:
+        preds = [np.mean(p, axis=-1).squeeze() for p in preds]
+    if hasattr(ds, 'target_transform'):
+        preds = [ds.target_transform.invert(p) for p in preds]
+        targets = [ds.target_transform.invert(t) for t in targets]
+    return preds, targets
 
 
 def generate_outputs(
@@ -1688,44 +1645,6 @@ def predict_longitudinal_datasets(
             df['y_pred'] = trial_preds
             df.to_csv(out_path)
             # TODO: plot_joint_scatter, plot_age_gap_hist
-
-
-# def predict_longitudinal_dataset(
-#     clf,
-#     ds,
-#     data_scaler,
-#     target_scaler,
-#     n_jobs,
-#     window_size_samples,
-#     n_channels,
-#     n_preds_per_input,
-#     preload,
-#     trialwise=True,
-#     average=True,
-# ):
-#     # create windows
-#     ds = _create_windows(
-#         mapping=None,
-#         tuabn=ds,
-#         window_size_samples=window_size_samples,
-#         n_channels=n_channels,
-#         n_jobs=n_jobs,
-#         preload=preload,
-#         n_preds_per_input=n_preds_per_input,
-#     )
-#     # set data and target scaling transform
-#     ds.transform = data_scaler
-#     ds.target_transform = target_scaler
-
-#     # make trialswise predictions
-#     if trialwise:
-#         preds = clf.predict_trials(ds, return_targets=False)
-#         if average:
-#             preds = [np.mean(p, axis=-1).item() for p in preds]
-#     else:
-#         preds = clf.predict(ds)
-#     preds = [target_scaler.invert(p) for p in preds]
-#     return preds
 
 
 def load_exp(
