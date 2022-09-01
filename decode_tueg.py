@@ -249,8 +249,9 @@ def decode_tueg(
     # generate simple output
     df = pd.DataFrame(estimator.history)
     df.to_csv(os.path.join(out_dir, 'history.csv'))
+    # there is one transform per dataset and one target_transform per concat dataset
     with open(os.path.join(out_dir, 'data_scaler.pkl'), 'wb') as f:
-        pickle.dump(tuabn_train.transform, f)
+        pickle.dump(tuabn_train.transform[0], f)
     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
         pickle.dump(tuabn_train.target_transform, f)
     train_preds, valid_preds, scores = make_final_predictions(
@@ -649,6 +650,7 @@ def get_n_preds_per_input(
     return n_preds_per_input
 
 
+# TODO: remove and use create_fixed_length_windwos directly
 def _create_windows(
     mapping,
     tuabn,
@@ -1326,7 +1328,7 @@ def make_final_predictions(
         test_name(final_eval),
         target_name,
         tuabn_train.target_transform,
-        tuabn_train.transform[0],
+        tuabn_train.transform[0],  # TODO: make sure to use .transform[0] also elsewhere
         n_jobs,
         return_y_yhat=True,
     )
@@ -1360,7 +1362,7 @@ def create_final_scores(
             target_scaler,
             data_scaler, 
             n_jobs,
-            mem_efficient=False,
+            mem_efficient=True if target_name in ['age_clf'] else False,
             trialwise=True,
             average_time_axis=True,
         )
