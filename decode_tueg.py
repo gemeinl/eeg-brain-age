@@ -82,7 +82,6 @@ def decode_tueg(
     preload,
     seed,
     shuffle_data_before_split,
-    split_kind,
     squash_outs,
     standardize_data,
     standardize_targets,
@@ -120,7 +119,7 @@ def decode_tueg(
     check_input_args(
         batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
         model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, out_dir,
-        preload, seed, shuffle_data_before_split, split_kind, squash_outs, standardize_data,
+        preload, seed, shuffle_data_before_split, squash_outs, standardize_data,
         standardize_targets, subset, target_name, tmax, tmin, valid_set_i,
         window_size_samples, augment, loss, logger,
     )
@@ -307,7 +306,6 @@ def check_input_args(
     preload,
     seed,
     shuffle_data_before_split,
-    split_kind,
     squash_outs,
     standardize_data,
     standardize_targets, 
@@ -328,11 +326,8 @@ def check_input_args(
         raise ValueError(f"cannot decode '{target_name}' with just one class ({subset})")
     if final_eval == 1:
         logger.warning(f"'valid_set_i' without effect when final_eval is True")
-        logger.warning(f"'split_kind' without effect when final_eval is True")
     if target_name != 'age' and standardize_targets:
         logger.warning(f"'standardize_targets' without effect with this target ({target_name})")
-    if shuffle_data_before_split and split_kind in ['age_distribution', 'chronological']:
-        logger.warning(f"'shuffle_data_before_split' without effect with this split_kind ({split_kind})")
     if target_name not in ['age', 'gender', 'pathological', 'age_clf']:
         raise ValueError(f"unknown target name {target_name}")
     if subset not in ['normal', 'abnormal', 'mixed']:
@@ -350,8 +345,6 @@ def check_input_args(
         raise ValueError
     if preload not in [0, 1]:
         raise ValueError
-    if split_kind not in ['chronological', 'random', 'age_distribution']:
-        raise ValueError(f"unkown split type {split_kind}")
     if augment not in [
         'dropout', 'shuffle', 'fliplr', 'random', 
         'reverse', 'sign', 'noise', 'mask', 'flipfb',
@@ -1753,7 +1746,7 @@ def plot_thresh_to_acc(
     accs = []
     for thresh in sorted_gaps:
         y_true=df['pathological'].to_numpy(dtype=int)
-        y_pred=(gaps < thresh).to_numpy(dtype=int)
+        y_pred=(gaps > thresh).to_numpy(dtype=int)
         #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
         accs.append(
             balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
@@ -1764,9 +1757,16 @@ def plot_thresh_to_acc(
     
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(10,2))
-    ax.plot(df['thresh'], df['acc'], c='b' if 0 in df.pathological.unique() else 'g')  # does not make sense in mixed case
+    if 0 not in df.pathological.unique():
+        c='g' 
+    elif 1 not in df.pathological.unique():
+        c='b'
+    else:
+        c='k'
+    ax.plot(df['thresh'], df['acc'], c=c)  # does not make sense in mixed case
     ax.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Decoded Age – Chronological Age [years]')
+    ax.set_xlabel('Chronological Age – Decoded Age [years]')
+    ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen')
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
@@ -1857,49 +1857,136 @@ def plot_joint_scatter(
 
 
 def jointplot(df):
-    grid = sns.JointGrid(height=9)
+    palette = sns.color_palette()
+    grid = sns.JointGrid(height=5)
     sns.lineplot(x=[0, 100], y=[0, 100], ax=grid.ax_joint, color='magenta', linestyle='--')
-
+    
     x = 'y_pred'
     y = 'y_true'
     hue = 'pathological'
     max_age = 100
-    for d, c in [(df[~df.pathological], 'black'), (df[df.pathological], 'white')]:
-        sns.scatterplot(data=d, x=x, y=y, ax=grid.ax_joint, ci=None, edgecolor=c, alpha=.8)
+    df_non_patho = df[df.pathological == 0]
+    df_patho = df[df.pathological == 1]
+    non_patho_c = palette[0]
+    patho_c = palette[1]
+    non_patho_edge_c = 'black'
+    patho_edge_c = 'white'
+    sns.scatterplot(data=df_non_patho, x=x, y=y, ax=grid.ax_joint, ci=None,
+                    edgecolor=non_patho_edge_c, alpha=.8, c=[non_patho_c])
+    sns.scatterplot(data=df_patho, x=x, y=y, ax=grid.ax_joint, ci=None, 
+                    edgecolor=patho_edge_c, alpha=.8, c=[patho_c])
 
-    for d in [df[~df.pathological], df[df.pathological]]:
-        m, b = np.polyfit(d.y_true.to_numpy('int'), d.y_pred.to_numpy('float'), 1)
-        grid.ax_joint.plot(m*d.y_true + b, d.y_true, linewidth=1)
+#     for d in [df_non_patho, df_patho]:
+#     if only pathological / non-pathological recs were decoded, d might be empty
+#     if d.empty:
+#         continue
+#     color = palette[0] if 0 in d.pathological.unique() else palette[1]
+    if not df_non_patho.empty:
+        m, b = np.polyfit(df_non_patho.y_true.to_numpy('int'), df_non_patho.y_pred.to_numpy('float'), 1)
+        grid.ax_joint.plot(m*df_non_patho.y_true + b, df_non_patho.y_true, linewidth=1, color=non_patho_c)
 
-    sns.scatterplot(data=df.groupby(hue, as_index=False).mean(), 
-                    x=x, y=y, ax=grid.ax_joint, hue=hue, marker='^', s=200, edgecolor='black')
+    if not df_patho.empty:
+        m, b = np.polyfit(df_patho.y_true.to_numpy('int'), df_patho.y_pred.to_numpy('float'), 1)
+        grid.ax_joint.plot(m*df_patho.y_true + b, df_patho.y_true, linewidth=1, color=patho_c)
 
-    sns.histplot(data=df, y=y, ax=grid.ax_marg_y, kde=True, 
-                 hue=hue, legend=None, stat='density', bins=list(range(max_age)))
-    sns.kdeplot(data=df, y=y, ax=grid.ax_marg_y, legend=None, color='black')
+#     sns.scatterplot(data=d.groupby(hue, as_index=False).mean(), 
+#                     x=x, y=y, ax=grid.ax_joint, hue=hue, marker='^', 
+#                     s=200, edgecolor='black')#, palette=[palette[0], palette[1]])
 
-    sns.histplot(data=df, x=x, ax=grid.ax_marg_x, kde=True, 
-                 hue=hue, legend=None, stat='density', bins=list(range(max_age)))
-    sns.kdeplot(data=df, x=x, ax=grid.ax_marg_x, legend=None, color='black')
+    sns.histplot(data=df_non_patho, y=y, ax=grid.ax_marg_y, kde=True, palette=[palette[0]],
+                 legend=None, stat='density', bins=list(range(max_age)))
+    sns.kdeplot(data=df_non_patho, y=y, ax=grid.ax_marg_y, legend=None, color='black')
+
+    sns.histplot(data=df_patho, x=x, ax=grid.ax_marg_x, kde=True, palette=[palette[1]],
+                 legend=None, stat='density', bins=list(range(max_age)))
+    sns.kdeplot(data=df_patho, x=x, ax=grid.ax_marg_x, legend=None, color='black')
 
     grid.ax_joint.set_ylabel('Chronological Age [years]')
     grid.ax_joint.set_xlabel('Decoded Age [years]')
     return grid
+
+
+def plot_heatmap(H, df, bin_size, max_age, cmap, vmax=None, ax=None):
+    # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap_ = LinearSegmentedColormap.from_list('', ['white', *getattr(plt.cm, cmap)(np.arange(255))])
     
+    if ax is None:
+        fig, ax = plt.subplots(1,1,figsize=(7,6))
+    ax.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax)
+    ax.invert_yaxis()
+    
+#     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
+#     ax.plot(m*df.y_true + b, df.y_true, linewidth=1, color='magenta' if cmap == 'Reds' else 'cyan', label='trend')
+    
+    ax.scatter(
+        df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size,
+        marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
+        s=250, edgecolor='k', zorder=3)
+    
+#     ax.axvline(df.y_true.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
+#     ax.axhline(df.y_pred.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
+
+    ticklabels = [t.get_text() for t in ax.get_xticklabels()]
+    ticklabels = [str(int(t)*bin_size) for t in ticklabels]
+    ax.set_xticklabels(ticklabels)
+    ax.set_yticklabels(ticklabels)
+    ax.set_xlabel('Chronological Age [years]')
+    ax.set_ylabel('Decoded Age [years]')
+    
+    xoffset = 12
+    yoffset = 2
+    ax.text(ax.get_xlim()[1]-xoffset*2/bin_size, 1*2/bin_size, 'Underestimated', weight='bold')
+    ax.text(1*2/bin_size, ax.get_ylim()[1]-yoffset*2/bin_size, 'Overestimated', weight='bold')
+    return ax
+
+
+def plot_heatmaps(df, bin_size, max_age):
+    Hs = []
+    dfs = [df[~df.pathological], df[df.pathological]]
+    for this_df in dfs:
+        H, xedges, yedges = np.histogram2d(
+            this_df.y_true, this_df.y_pred, 
+            bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
+        )
+        Hs.append(H)
+    Hmax = max([H.max() for H in Hs])
+
+    fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
+    fig.tight_layout()
+    
+    for i, (H, this_df, cmap) in enumerate(zip(Hs, dfs, ['Blues', 'Reds'])):
+        ax = plot_heatmap(
+            H,
+            this_df,
+            bin_size=bin_size,
+            max_age=max_age,
+            cmap=cmap,
+            ax=ax_arr[i],
+            vmax=Hmax,
+        )
+        mae = this_df = mean_absolute_error(this_df.y_true, this_df.y_pred)
+        ax.set_title(f'Non-pathological ({mae:.2f} mae)' if i == 0 else f'Pathological ({mae:.2f} mae)')
+    return ax_arr
+
     
 def plot_age_gap_hist(
     df,
     ax=None,
 ):
-    df['gap'] = df.y_pred - df.y_true
+    df['gap'] = df.y_true - df.y_pred
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
     ax = sns.histplot(data=df, x='gap', 
                       hue='pathological' if df.pathological.nunique() != 1 else None,
                       #stat='percent', 
-                      color='b' if 0 in df.pathological.unique() else 'g',
+                      color='g' if 0 not in df.pathological.unique() else 'b',
+                      palette=['b', 'r'] if df.pathological.nunique() != 1 else None,
                       ax=ax, kde=True)#, ax=ax, binwidth=5)
-    ax.set_xlabel('Decoded age - Chronological age [years]')
+    ax.axvline(df[~df.pathological].gap.mean(), c='cyan')
+    ax.axvline(df[df.pathological].gap.mean(), c='magenta')    
+    ax.set_xlabel('Chronological age - Decoded age [years]')
     ax.set_title(f'Brain age gap')
     return ax
 
@@ -1939,7 +2026,6 @@ if __name__ == "__main__":
     parser.add_argument('--preload', type=int)
     parser.add_argument('--seed', type=int)
     parser.add_argument('--shuffle-data-before-split', type=int)
-    parser.add_argument('--split-kind', type=str)
     parser.add_argument('--squash-outs', type=int)
     parser.add_argument('--standardize-data', type=int)
     parser.add_argument('--standardize-targets', type=int)
