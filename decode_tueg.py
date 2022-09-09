@@ -532,7 +532,8 @@ def get_model(
             n_classes = 2
             final_conv_length = 25
         elif target_name == 'age_clf':
-            raise NotImplementedError
+            n_classes = 1
+            final_conv_length = 35
         model = ShallowFBCSPNet(
             in_chans=n_channels,
             n_classes=n_classes,
@@ -1763,10 +1764,12 @@ def plot_thresh_to_acc(
         c='b'
     else:
         c='k'
-    ax.plot(df['thresh'], df['acc'], c=c)  # does not make sense in mixed case
+    ax.plot(df['thresh'], df['acc'], c=c, zorder=3)  # does not make sense in mixed case
     ax.set_ylabel('Accuracy [%]')
     ax.set_xlabel('Chronological Age – Decoded Age [years]')
-    ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen')
+    print(sorted_gaps[df.acc.argmax()])
+    ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
+    ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
@@ -1906,6 +1909,55 @@ def jointplot(df):
     return grid
 
 
+def create_grid(hist_max_count):
+    #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
+    fig, ax = plt.subplots(1, 1, figsize=(15,15))
+    gridx = 12
+    gridy = 12
+    ax0 = plt.subplot2grid((gridx, gridy), (0, 2), colspan=5, rowspan=2)
+    ax1 = plt.subplot2grid((gridx, gridy), (0, 7), colspan=5, rowspan=2)
+
+    ax2 = plt.subplot2grid((gridx, gridy), (2, 0), rowspan=5, colspan=2)
+    ax2.invert_xaxis()
+    ax3 = plt.subplot2grid((gridx, gridy), (2, 2), rowspan=5, colspan=5)
+    ax4 = plt.subplot2grid((gridx, gridy), (2, 7), rowspan=5, colspan=5)
+
+    xlim = (-5, 105)
+    ylim = (-5, 105)
+    ax0.set_title('Test1')
+    ax0.set_xlim(xlim)
+    ax0.set_ylim([0, hist_max_count])
+    ax0.set_xticklabels([])
+    ax0.set_xlabel(' ')
+    ax0.set_facecolor('white')
+    ax0.grid(color='grey')
+    ax1.set_title('Test2')
+    ax1.set_xlim(xlim)
+    ax1.set_ylim([0, hist_max_count])
+    ax1.set_xticklabels([])
+    ax1.set_xlabel(' ')
+    ax1.set_yticklabels([])
+    ax1.set_ylabel(' ')
+    ax1.grid(color='grey')
+    ax1.set_facecolor('white')
+    ax2.set_ylim(ylim)
+    ax2.set_xlim([hist_max_count, 0])
+    ax2.set_facecolor('white')
+    ax2.set_ylabel('Decoded Age [years]')
+    ax2.grid(color='grey')
+    ax3.set_ylim(ylim)
+    ax3.set_yticklabels([])
+    ax3.set_ylabel(' ')
+    ax3.set_xlabel('Chronological Age [years]')
+    ax3.grid(color='grey')
+    ax4.set_ylim(ylim)
+    ax4.set_yticklabels([])
+    ax4.set_ylabel(' ')
+    ax4.set_xlabel('Chronological Age [years]')
+    ax4.grid(color='grey')
+    return fig, ax0, ax1, ax2, ax3, ax4
+
+
 def plot_heatmap(H, df, bin_size, max_age, cmap, vmax=None, ax=None):
     # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
     from matplotlib.colors import LinearSegmentedColormap
@@ -1913,28 +1965,33 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, vmax=None, ax=None):
     
     if ax is None:
         fig, ax = plt.subplots(1,1,figsize=(7,6))
-    ax.plot([0, 100], [0, 100], c='k', linewidth=1)
-    ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax)
+#     ax.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax, cbar=None)  # TODO: re-add cbar!
     ax.invert_yaxis()
     
 #     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
 #     ax.plot(m*df.y_true + b, df.y_true, linewidth=1, color='magenta' if cmap == 'Reds' else 'cyan', label='trend')
     
     ax.scatter(
-        df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size,
+        df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size, 
         marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
         s=250, edgecolor='k', zorder=3)
     
 #     ax.axvline(df.y_true.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
 #     ax.axhline(df.y_pred.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
 
-    ticklabels = [t.get_text() for t in ax.get_xticklabels()]
-    ticklabels = [str(int(t)*bin_size) for t in ticklabels]
-    ax.set_xticklabels(ticklabels)
-    ax.set_yticklabels(ticklabels)
+#     ticklabels = [t.get_text() for t in ax.get_xticklabels()]
+#     ticklabels = [str(int(t)*bin_size) for t in ticklabels]
+#     ax.set_xticklabels(ticklabels)
+#     ax.set_yticklabels(ticklabels)
     ax.set_xlabel('Chronological Age [years]')
-    ax.set_ylabel('Decoded Age [years]')
+    ax.set_xticks([int(i/bin_size) for i in np.linspace(0, 100, 6)])
+    ax.set_xticklabels([str(i) for i in np.linspace(0, 100, 6, dtype=int)], rotation=0)
     
+    #     ax.set_ylabel('Decoded Age [years]')
+    
+    ax.set_ylabel(' ')
+    ax.set_yticklabels([])
     xoffset = 12
     yoffset = 2
     ax.text(ax.get_xlim()[1]-xoffset*2/bin_size, 1*2/bin_size, 'Underestimated', weight='bold')
@@ -1942,33 +1999,59 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, vmax=None, ax=None):
     return ax
 
 
-def plot_heatmaps(df, bin_size, max_age):
+def plot_heatmaps(df, bin_size, max_age, hist_max_count):
+    fig, ax0, ax1, ax2, ax3, ax4 = create_grid(hist_max_count)
+    bins = np.linspace(0, 100, 21)
+    sns.histplot(df[~df.pathological].y_true, ax=ax0, color='b', kde=True, bins=bins)
+    ax0.axvline(df[~df.pathological].y_true.mean(), c='cyan')
+    sns.histplot(df[df.pathological].y_true, ax=ax1, color='r', kde=True, bins=bins)
+    ax1.axvline(df[df.pathological].y_true.mean(), c='magenta')
+
+    sns.histplot(data=df, y='y_pred', ax=ax2, hue='pathological', palette=['b', 'r'], kde=True, bins=bins)
+    ax2.axhline(df[~df.pathological].y_pred.mean(), c='cyan')
+    ax2.axhline(df[df.pathological].y_pred.mean(), c='magenta')
+
+#     sns.scatterplot(data=df[~df.pathological], x='y_true', y='y_pred', ax=ax3, c='b')
+    sns.lineplot(x=[0, 100], y=[0, 100], ax=ax3, c='k', linewidth=1)
+    sns.scatterplot(data=df[~df.pathological].mean().to_frame().T, x='y_true', y='y_pred',
+                    ax=ax3, c='cyan', marker='*', s=300)
+#     sns.scatterplot(data=df[df.pathological], x='y_true', y='y_pred', ax=ax4, c='r')
+    sns.lineplot(x=[0, 100], y=[0, 100], ax=ax4, c='k')
+    sns.scatterplot(data=df[df.pathological].mean().to_frame().T, x='y_true', y='y_pred', 
+                    ax=ax4, c='magenta', marker='*', s=300)
+
     Hs = []
     dfs = [df[~df.pathological], df[df.pathological]]
     for this_df in dfs:
+        if this_df.empty:
+            print("skipped")
+            continue
         H, xedges, yedges = np.histogram2d(
-            this_df.y_true, this_df.y_pred, 
+            this_df.y_pred, this_df.y_true, 
             bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
         )
         Hs.append(H)
     Hmax = max([H.max() for H in Hs])
 
-    fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
-    fig.tight_layout()
-    
+#     fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
+#     fig.tight_layout()
+    axs = [ax3, ax4]
+    axs2 = [ax0, ax1]
     for i, (H, this_df, cmap) in enumerate(zip(Hs, dfs, ['Blues', 'Reds'])):
+        if this_df.empty:
+            continue
         ax = plot_heatmap(
             H,
             this_df,
             bin_size=bin_size,
             max_age=max_age,
             cmap=cmap,
-            ax=ax_arr[i],
+            ax=axs[i],
             vmax=Hmax,
         )
-        mae = this_df = mean_absolute_error(this_df.y_true, this_df.y_pred)
-        ax.set_title(f'Non-pathological ({mae:.2f} mae)' if i == 0 else f'Pathological ({mae:.2f} mae)')
-    return ax_arr
+        mae = mean_absolute_error(this_df.y_true, this_df.y_pred)
+        axs2[i].set_title(f'Non-pathological ({mae:.2f} years mae)' if i == 0 else f'Pathological ({mae:.2f} years mae)')
+    return fig
 
     
 def plot_age_gap_hist(
