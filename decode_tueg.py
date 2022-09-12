@@ -1764,12 +1764,41 @@ def plot_thresh_to_acc(
         c='b'
     else:
         c='k'
-    ax.plot(df['thresh'], df['acc'], c=c, zorder=3)  # does not make sense in mixed case
+        
+    ax.plot(df['thresh'], df['acc'], c=c)#, zorder=3)  # does not make sense in mixed case
+    ax.fill_between(df['thresh'][df['thresh'] < sorted_gaps[df.acc.argmax()]],
+                    df['acc'][df['thresh'] <sorted_gaps[df.acc.argmax()]], 50, 
+                    color='b', label='non-pathological', alpha=.5)
+    ax.fill_between(df['thresh'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 
+                    df['acc'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 50,
+                    color='r', label='pathological', alpha=.5)
+    
     ax.set_ylabel('Accuracy [%]')
     ax.set_xlabel('Chronological Age – Decoded Age [years]')
-    print(sorted_gaps[df.acc.argmax()])
-    ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
-    ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
+    ax.legend()
+    
+    ax.plot([sorted_gaps[df.acc.argmax()], sorted_gaps[df.acc.argmax()]], 
+            [ax.get_ylim()[0],  df.acc.max()], 
+            c='lightgreen', linewidth=1)
+    ax.plot([ax.get_xlim()[0], sorted_gaps[df.acc.argmax()]], 
+            [df.acc.max(), df.acc.max()], 
+            c='lightgreen', linewidth=1)
+#     ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
+#     ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
+    ax.scatter(sorted_gaps[df.acc.argmax()], df.acc.max(), zorder=4, marker='*', 
+               c='lightgreen', s=20)
+    
+    offset = .5
+    ax.text(sorted_gaps[df.acc.argmax()], ax.get_ylim()[0]-offset, f"{sorted_gaps[df.acc.argmax()]:.2f}",
+            ha='center', va='top', fontweight='bold')#, c='lightgreen')
+    ax.text(ax.get_xlim()[0]-4*offset, df.acc.max()-offset, f"{df.acc.max():.2f}",
+            ha='left', va='bottom', fontweight='bold')#, c='lightgreen')
+#     ax.text(ax.get_xlim()[0]+10*offset, df.acc.max()-offset, f"{df.acc.max():.2f}",
+#             ha='right', va='bottom', fontweight='bold')#, c='lightgreen')
+
+    xlim = max(abs(sorted_gaps)) * 1.1
+    ax.set_xlim(-xlim, xlim)
+    
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
@@ -1916,11 +1945,13 @@ def create_grid(hist_max_count):
     gridy = 12
     ax0 = plt.subplot2grid((gridx, gridy), (0, 2), colspan=5, rowspan=2)
     ax1 = plt.subplot2grid((gridx, gridy), (0, 7), colspan=5, rowspan=2)
-
     ax2 = plt.subplot2grid((gridx, gridy), (2, 0), rowspan=5, colspan=2)
     ax2.invert_xaxis()
     ax3 = plt.subplot2grid((gridx, gridy), (2, 2), rowspan=5, colspan=5)
     ax4 = plt.subplot2grid((gridx, gridy), (2, 7), rowspan=5, colspan=5)
+    # TODO: for some reason adding this for color bars makes everything crash?
+#     ax5 = plt.subplot2grid((gridx, gridy), (0, 0), colspan=1, rowspan=2)
+#     ax6 = plt.subplot2grid((gridx, gridy), (1, 0), colspan=1, rowspan=2)
 
     xlim = (-5, 105)
     ylim = (-5, 105)
@@ -1930,7 +1961,7 @@ def create_grid(hist_max_count):
     ax0.set_xticklabels([])
     ax0.set_xlabel(' ')
     ax0.set_facecolor('white')
-    ax0.grid(color='grey')
+#     ax0.grid(color='grey')
     ax1.set_title('Test2')
     ax1.set_xlim(xlim)
     ax1.set_ylim([0, hist_max_count])
@@ -1938,23 +1969,23 @@ def create_grid(hist_max_count):
     ax1.set_xlabel(' ')
     ax1.set_yticklabels([])
     ax1.set_ylabel(' ')
-    ax1.grid(color='grey')
+#     ax1.grid(color='grey')
     ax1.set_facecolor('white')
     ax2.set_ylim(ylim)
     ax2.set_xlim([hist_max_count, 0])
     ax2.set_facecolor('white')
     ax2.set_ylabel('Decoded Age [years]')
-    ax2.grid(color='grey')
+#     ax2.grid(color='grey')
     ax3.set_ylim(ylim)
     ax3.set_yticklabels([])
     ax3.set_ylabel(' ')
     ax3.set_xlabel('Chronological Age [years]')
-    ax3.grid(color='grey')
+#     ax3.grid(color='grey')
     ax4.set_ylim(ylim)
     ax4.set_yticklabels([])
     ax4.set_ylabel(' ')
     ax4.set_xlabel('Chronological Age [years]')
-    ax4.grid(color='grey')
+#     ax4.grid(color='grey')
     return fig, ax0, ax1, ax2, ax3, ax4
 
 
@@ -1976,6 +2007,10 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, vmax=None, ax=None):
         df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size, 
         marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
         s=250, edgecolor='k', zorder=3)
+    
+    # TODO: double and triple check why i need to swap y_true and y_pred x and y here
+    m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
+    ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, c='magenta' if cmap == 'Reds' else 'cyan')
     
 #     ax.axvline(df.y_true.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
 #     ax.axhline(df.y_pred.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
@@ -2011,14 +2046,12 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
     ax2.axhline(df[~df.pathological].y_pred.mean(), c='cyan')
     ax2.axhline(df[df.pathological].y_pred.mean(), c='magenta')
 
-#     sns.scatterplot(data=df[~df.pathological], x='y_true', y='y_pred', ax=ax3, c='b')
     sns.lineplot(x=[0, 100], y=[0, 100], ax=ax3, c='k', linewidth=1)
-    sns.scatterplot(data=df[~df.pathological].mean().to_frame().T, x='y_true', y='y_pred',
-                    ax=ax3, c='cyan', marker='*', s=300)
-#     sns.scatterplot(data=df[df.pathological], x='y_true', y='y_pred', ax=ax4, c='r')
+    sns.scatterplot(data=df[~df.pathological][['y_pred', 'y_true']].mean().to_frame().T, 
+                    x='y_true', y='y_pred', ax=ax3, c='cyan', marker='*', s=300)
     sns.lineplot(x=[0, 100], y=[0, 100], ax=ax4, c='k')
-    sns.scatterplot(data=df[df.pathological].mean().to_frame().T, x='y_true', y='y_pred', 
-                    ax=ax4, c='magenta', marker='*', s=300)
+    sns.scatterplot(data=df[df.pathological][['y_pred', 'y_true']].mean().to_frame().T, 
+                    x='y_true', y='y_pred', ax=ax4, c='magenta', marker='*', s=300)
 
     Hs = []
     dfs = [df[~df.pathological], df[df.pathological]]
@@ -2026,6 +2059,7 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
         if this_df.empty:
             print("skipped")
             continue
+        # TODO: double and triple check why i need to swap y_true and y_pred x and y here
         H, xedges, yedges = np.histogram2d(
             this_df.y_pred, this_df.y_true, 
             bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
@@ -2067,8 +2101,16 @@ def plot_age_gap_hist(
                       color='g' if 0 not in df.pathological.unique() else 'b',
                       palette=['b', 'r'] if df.pathological.nunique() != 1 else None,
                       ax=ax, kde=True)#, ax=ax, binwidth=5)
-    ax.axvline(df[~df.pathological].gap.mean(), c='cyan')
-    ax.axvline(df[df.pathological].gap.mean(), c='magenta')    
+    mean_non_pato_gap = df[~df.pathological].gap.mean()
+    mean_patho_gap = df[df.pathological].gap.mean() 
+    ax.axvline(mean_non_pato_gap, c='cyan')
+    ax.axvline(mean_patho_gap, c='magenta')    
+    if mean_patho_gap > mean_non_pato_gap:
+        ax.text(mean_non_pato_gap + (mean_patho_gap - mean_non_pato_gap)/2, ax.get_ylim()[1], 
+                f"{(mean_patho_gap - mean_non_pato_gap):.2f}", fontweight='bold',
+                ha='center', va='bottom')
+    else:
+        raise NotImplementedError
     ax.set_xlabel('Chronological age - Decoded age [years]')
     ax.set_title(f'Brain age gap')
     return ax
