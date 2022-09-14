@@ -232,7 +232,7 @@ def decode_tueg(
         callbacks,
         loss,
     )
-    estimator, augmenter = set_augmentation(
+    estimator = set_augmentation(
         augment,
         ch_names,
         seed,
@@ -348,9 +348,9 @@ def check_input_args(
     if augment not in [
         'dropout', 'shuffle', 'fliplr', 'random', 
         'reverse', 'sign', 'noise', 'mask', 'flipfb',
-        'identity',
+        'identity', '0',
     ]:
-        raise ValueError(f"Unkown augmentation {augment}.")
+        raise ValueError(f"Unknown augmentation {augment}.")
     if loss not in ['mse', 'mae', 'log_cosh', 'huber', 'nll']:
         raise ValueError(f'Unkown loss {loss}')
     if target_name in ['pathological', 'gender', 'age_clf'] and loss != 'nll':
@@ -1234,6 +1234,8 @@ def set_augmentation(
     n_examples,
     batch_size,
 ):
+    if augment == '0':
+        return estimator
     probability = 1
     augmentations = {
         'dropout': ChannelsDropout(probability=probability, p_drop=.2, random_state=seed),
@@ -1275,7 +1277,7 @@ def set_augmentation(
         'iterator_train__transforms': [augmenter],
         'iterator_train': AugmentedDataLoader,
     })
-    return estimator, augmenter
+    return estimator
 
 
 def save_log(
@@ -1993,12 +1995,10 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax=None, ax=None):
     
     if ax is None:
         fig, ax = plt.subplots(1,1,figsize=(7,6))
-#     ax.plot([0, 100], [0, 100], c='k', linewidth=1)
-    ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax, cbar_ax=cbar_ax, cbar_kws={'aspect': 50, 'fraction': 0.05})  # TODO: re-add cbar!
+
+    ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax,
+                     cbar_ax=cbar_ax, cbar_kws={'aspect': 50, 'fraction': 0.05})
     ax.invert_yaxis()
-    
-#     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
-#     ax.plot(m*df.y_true + b, df.y_true, linewidth=1, color='magenta' if cmap == 'Reds' else 'cyan', label='trend')
     
     ax.scatter(
         df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size, 
@@ -2023,8 +2023,8 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax=None, ax=None):
     
     ax.set_ylabel(' ')
     ax.set_yticklabels([])
-    ax.text(ax.get_xlim()[0], ax.get_ylim()[1], 'Underestimated', ha='left', va='top', weight='bold')
-    ax.text(ax.get_xlim()[1], ax.get_ylim()[0], 'Overestimated', ha='right', va='bottom', weight='bold')
+    ax.text(ax.get_xlim()[0], ax.get_ylim()[1], 'Overestimated', ha='left', va='top', weight='bold')
+    ax.text(ax.get_xlim()[1], ax.get_ylim()[0], 'Underestimated', ha='right', va='bottom', weight='bold')
     return ax
 
 
@@ -2101,7 +2101,6 @@ def plot_age_gap_hist(
     df,
     ax=None,
 ):
-    # TODO: center plot around zero
     df['gap'] = df.y_true - df.y_pred
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
@@ -2116,20 +2115,42 @@ def plot_age_gap_hist(
                       color='g' if 0 not in df.pathological.unique() else 'b',
                       palette=['b', 'r'] if df.pathological.nunique() != 1 else None,
                       ax=ax, kde=True, bins=bins)#, align='center') # TODO: adding this crashes?
-    mean_non_pato_gap = df[~df.pathological].gap.mean()
+    mean_non_patho_gap = df[~df.pathological].gap.mean()
     mean_patho_gap = df[df.pathological].gap.mean() 
-    ax.axvline(mean_non_pato_gap, c='cyan')
+    ax.axvline(mean_non_patho_gap, c='cyan')
     ax.axvline(mean_patho_gap, c='magenta')    
-    if mean_patho_gap > mean_non_pato_gap:
-        ax.text(mean_non_pato_gap + (mean_patho_gap - mean_non_pato_gap)/2, ax.get_ylim()[1], 
-                f"{(mean_patho_gap - mean_non_pato_gap):.2f}", fontweight='bold',
+    if mean_patho_gap > mean_non_patho_gap:
+        ax.text(mean_non_patho_gap + (mean_patho_gap - mean_non_patho_gap)/2, ax.get_ylim()[1], 
+                f"{(mean_patho_gap - mean_non_patho_gap):.2f}", fontweight='bold',
                 ha='center', va='bottom')
     else:
-        raise NotImplementedError
+        ax.text(mean_patho_gap + (mean_non_patho_gap - mean_patho_gap)/2, ax.get_ylim()[1], 
+                f"{(mean_non_patho_gap - mean_patho_gap):.2f}", fontweight='bold',
+                ha='center', va='bottom')
     max_abs_gap = max(abs(df.gap))*1.1
     ax.set_xlim(-max_abs_gap, max_abs_gap)
     ax.set_xlabel('Chronological age - Decoded age [years]')
     ax.set_title(f'Brain age gap')
+    return ax
+
+
+def plot_violin(y, sampled_y):
+    fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+    ax.axvline(y, c='lightgreen')
+    ax = sns.violinplot(x=sampled_y, kde=True, color='g')
+    # set violin alpha = .5
+    # https://github.com/mwaskom/seaborn/issues/622
+    from matplotlib.collections import PolyCollection
+    for art in ax.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.5)
+    ax.set_xlabel('Accuracy [%]')
+    ax.legend(['actual', 'sampled'])
+    # offset = .04
+    # ax.text(acc, ax.get_ylim()[0]+offset, f'{acc:.2f}',
+    #         ha='center', va='top', fontweight='bold')
+    ax.text(y, ax.get_ylim()[1], f'{y:.2f}',
+            ha='center', va='bottom', fontweight='bold')
     return ax
 
 
