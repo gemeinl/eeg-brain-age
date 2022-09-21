@@ -61,7 +61,8 @@ logger.addHandler(screen_handler)
 def _decode_tueg(params):
     config = json.loads(params)
     decode_tueg(**params, config=config)
-    
+
+
 # TODO: replace color codes in the output log txt file?
 # TODO: physician reports are missing in TUH_PRE. add back
 # TODO: look at the (negative) outliers reports. why are they outliers?
@@ -70,6 +71,7 @@ def decode_tueg(
     batch_size,
     config,
     data_path,
+    date,
     debug,
     final_eval,
     intuitive_training_scores,
@@ -98,9 +100,7 @@ def decode_tueg(
     """
     TODO: add docstring
     """
-    now = datetime.now()
-    now = now.strftime("%y%m%d%H%M%S%f")
-    out_dir = os.path.join(out_dir, now)
+    out_dir = os.path.join(out_dir, date, str(seed), str(valid_set_i))
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     else:
@@ -138,7 +138,7 @@ def decode_tueg(
     cropped = True
     logger.debug(f"cropped: {cropped}")
 
-    tuabn_train, tuabn_valid, mapping  = get_datasets(
+    tuabn_train, tuabn_valid, mapping, valid_rest  = get_datasets(
         data_path, 
         target_name,
         subset,
@@ -195,7 +195,6 @@ def decode_tueg(
         tuabn_train,
         tuabn_valid,
         window_size_samples,
-        n_channels,
         n_jobs,
         preload,
         n_preds_per_input,
@@ -247,37 +246,56 @@ def decode_tueg(
     logger.info(f'finished training')
     # generate simple output
     df = pd.DataFrame(estimator.history)
-    df.to_csv(os.path.join(out_dir, 'history.csv'))
+    save_csv(df, out_dir, 'history.csv')
     # there is one transform per dataset and one target_transform per concat dataset
     with open(os.path.join(out_dir, 'data_scaler.pkl'), 'wb') as f:
         pickle.dump(tuabn_train.transform[0], f)
     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
         pickle.dump(tuabn_train.target_transform, f)
-    train_preds, valid_preds, scores = make_final_predictions(
+    train_preds, valid_preds, scores = create_final_scores(
         estimator,
         tuabn_train,
         tuabn_valid,
-        final_eval,
+        test_name(final_eval),
         target_name,
+        tuabn_train.target_transform,
+        tuabn_train.transform[0],
         n_jobs,
     )
     pred_path = os.path.join(out_dir, 'preds')
     if not os.path.exists(pred_path):
         os.makedirs(pred_path)
-    train_preds.to_csv(os.path.join(out_dir, 'preds', f'train_end_train_preds.csv'))
-    valid_preds.to_csv(os.path.join(out_dir, 'preds', f'train_end_{test_name(final_eval)}_preds.csv'))
-    scores.to_csv(os.path.join(out_dir, f'train_end_scores.csv'))
-    # plot learning
-    fig, ax = plt.subplots(1, 1, figsize=(15,3))
-    ax = plot_learning(
-        df=df,
-        loss_key='loss',
-        loss_name=f'{loss} loss',
-        test_name=test_name(final_eval),
-        ax=ax,
-    )
-    ax.set_title(title)
-    save_fig(fig, out_dir, 'curves')
+    save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
+    save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
+    save_csv(scores, out_dir, 'train_end_scores.csv')
+    # predict 'rest' dataset aka when selecting only normals, predict pathologicals and vice versa
+    if valid_rest is not None:
+        valid_rest = preprocess(
+            valid_rest, 
+            preprocessors=get_preprocessors(tmin, tmax), 
+            n_jobs=n_jobs,
+        )
+        valid_rest = _create_windows(
+            valid_rest,
+            window_size_samples,
+            n_jobs, 
+            preload,
+            n_preds_per_input,
+            mapping,
+        )
+        valid_rest_preds, valid_rest_score = _create_final_scores(
+            estimator,
+            valid_rest,
+            'valid_rest',
+            target_name,
+            tuabn_train.target_transform,
+            tuabn_train.transform[0],
+            n_jobs,
+        )
+        save_csv(valid_rest_preds, pred_path, 'train_end_valid_rest_preds.csv')
+        scores.update(valid_rest_score)
+        save_csv(scores, out_dir, 'train_end_scores.csv')
+    # TODO: predict longitudinal dataset
     logger.info('done.')
 
 
@@ -454,10 +472,11 @@ def get_datasets(
     # select normal/abnormal only
     logger.debug(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)}) selecting {subset}")
-    tuabn_train = subselect(tuabn_train, subset)
-    tuabn_valid = subselect(tuabn_valid, subset)
+    tuabn_train, _ = subselect(tuabn_train, subset)
+    tuabn_valid, valid_rest = subselect(tuabn_valid, subset)
     logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)})")
+    logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
     
     # reduce number of train recordings
     if n_train_recordings != -1:
@@ -483,7 +502,7 @@ def get_datasets(
         mapping = {'M': 0, 'F': 1}
     else:
         mapping = None
-    return tuabn_train, tuabn_valid, mapping
+    return tuabn_train, tuabn_valid, mapping, valid_rest
 
 
 def subselect(
@@ -491,6 +510,7 @@ def subselect(
     subset,
 ):
     # select normal / abnormal only
+    rest_dataset = None
     if subset != 'mixed':
         k = 'pathological'
         v = 'False' if subset == 'normal' else 'True'
@@ -498,8 +518,7 @@ def subselect(
         splits = dataset.split(k)
         dataset = splits[v]
         rest_dataset = splits[not_v]
-        #return dataset, rest_dataset
-    return dataset
+    return dataset, rest_dataset
 
 
 def get_model(
@@ -637,7 +656,7 @@ def get_n_preds_per_input(
         n_channels,
         window_size_samples,
     ):
-    n_preds_per_input = model(torch.ones(1, n_channels, window_size_samples, 1)).size()[2]
+    n_preds_per_input = model(torch.ones(1, n_channels, window_size_samples, 1).to(next(model.parameters()).device)).size()[2]
     logger.debug(f"model produces {n_preds_per_input} preds for every input of size {window_size_samples}")
     return n_preds_per_input
 
@@ -647,7 +666,6 @@ def create_windows(
     tuabn_train,
     tuabn_valid,
     window_size_samples,
-    n_channels,
     n_jobs, 
     preload,
     n_preds_per_input,
@@ -655,23 +673,41 @@ def create_windows(
 ):
     logger.debug("windowing")
     [tuabn_train, tuabn_valid] = [
-        create_fixed_length_windows(
+        _create_windows(
             ds,
-            window_size_samples=window_size_samples,
-            window_stride_samples=window_size_samples-n_preds_per_input,
-            n_jobs=min(n_jobs, 4),
-            preload=bool(preload),
-            mapping=mapping,
-            drop_last_window=False,
-            drop_bad_windows=True,
-            reject=None,
-            flat=None,
+            window_size_samples,
+            n_jobs,
+            preload,
+            n_preds_per_input,
+            mapping,
         )
         for ds in [tuabn_train, tuabn_valid]
     ]
     logger.debug(f'train windows {len(tuabn_train)}')
     logger.debug(f'{test_name} windows {len(tuabn_valid)}')
     return tuabn_train, tuabn_valid
+
+
+def _create_windows(
+    ds,
+    window_size_samples,
+    n_jobs, 
+    preload,
+    n_preds_per_input,
+    mapping,
+):
+    return create_fixed_length_windows(
+        ds,
+        window_size_samples=window_size_samples,
+        window_stride_samples=window_size_samples-n_preds_per_input,
+        n_jobs=min(n_jobs, 4),
+        preload=bool(preload),
+        mapping=mapping,
+        drop_last_window=False,
+        drop_bad_windows=True,
+        reject=None,
+        flat=None,
+    )
 
 
 def train_eval_split(df, seed):
@@ -885,8 +921,8 @@ def save_input(
 ):
     for df, csv_name in [
         (config, 'config.csv'),
-        (train_description, 'train_description.csv'),
-        (valid_description, f'{test_name}_description.csv'),
+#         (train_description, 'train_description.csv'),
+#         (valid_description, f'{test_name}_description.csv'),
     ]:
         save_csv(df, out_dir, csv_name)
     
@@ -955,30 +991,15 @@ def age_mae(
 def mae(
     y_true,
     y_pred,
-    return_y_yhat,
 ):
-    score = float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
-    if return_y_yhat:
-        return {'score_name': 'mae', 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
-    return {'score_name': 'mae', 'score': score}
-    
+    return float(mean_absolute_error(y_true=y_true, y_pred=y_pred))
+
 
 def acc(
     y_true,
     y_pred,
-    return_y_yhat,
 ):
-    score = balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
-    if return_y_yhat:
-        return {'score_name': 'acc', 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
-    return {'score_name': 'acc', 'score': score}
-
-
-# def _return_score(score, score_name, y_true=None, y_pred=None):
-#     if y_true is not None and y_pred is not None:
-#         return {'score_name': score_name, 'score': score, 'y_true': y_true, 'y_pred': y_pred.squeeze()}
-#     else:
-#         return {'score_name': score_name, 'score': score}
+    return balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
 
 
 def window_acc(
@@ -1209,8 +1230,8 @@ class Augmenter(Transform):
         self.calls_per_epoch = n_examples // batch_size
         if n_examples % batch_size != 0:
             self.calls_per_epoch += 1
-        logger.debug(f"With {n_examples} examples and batch size of {batch_size}")
-        logger.debug(f"expecting {self.calls_per_epoch} batches/calls per epoch")
+#         logger.debug(f"With {n_examples} examples and batch size of {batch_size}")
+#         logger.debug(f"expecting {self.calls_per_epoch} batches/calls per epoch")
         self.n_times_called = 0
 
     def forward(self, X, y):
@@ -1234,6 +1255,7 @@ def set_augmentation(
     n_examples,
     batch_size,
 ):
+    # TODO: make augment a list of transformations
     if augment == '0':
         return estimator
     probability = 1
@@ -1292,36 +1314,39 @@ def save_log(
     with open(os.path.join(out_dir, 'log.txt'), 'w') as f:
         f.writelines(log_contents)
 
-        
-def make_final_predictions(
-    estimator,
-    tuabn_train,
-    tuabn_valid,
-    final_eval,
-    target_name,
-    n_jobs,
-):
-    # TODO: add window preds?
-    # TODO: add pathological and gender to preds df csv
-    scores = create_final_scores(
-        estimator,
-        tuabn_train,
-        tuabn_valid,
-        test_name(final_eval),
-        target_name,
-        tuabn_train.target_transform,
-        tuabn_train.transform[0],  # TODO: make sure to use .transform[0] also elsewhere
-        n_jobs,
-        return_y_yhat=True,
-    )
-    logger.info(f'made final predictions')
-    this_scores = {}
-    for ds_name, score in scores.items():
-        this_scores[ds_name] = {score['score_name']: score['score']}
-    this_scores = pd.DataFrame(this_scores)
-    train_preds = pd.DataFrame({k: scores['train'][k] for k in ['y_true', 'y_pred']})
-    valid_preds = pd.DataFrame({k: scores[test_name(final_eval)][k] for k in ['y_true', 'y_pred']})
-    return train_preds, valid_preds, this_scores
+
+# TODO: rewrite to only have one input dataset
+# def make_final_predictions(
+#     estimator,
+#     tuabn_train,
+#     tuabn_valid,
+#     final_eval,
+#     target_name,
+#     n_jobs,
+# ):
+#     # TODO: add window preds?
+#     # TODO: add pathological and gender to preds df csv
+#     scores = create_final_scores(
+#         estimator,
+#         tuabn_train,
+#         tuabn_valid,
+#         test_name(final_eval),
+#         target_name,
+#         tuabn_train.target_transform,
+#         tuabn_train.transform[0],  # TODO: make sure to use .transform[0] also elsewhere
+#         n_jobs,
+#         return_y_yhat=True,
+#     )
+#     logger.info(f'made final predictions')
+#     this_scores = {}
+#     for ds_name, score in scores.items():
+#         this_scores[ds_name] = {score['score_name']: score['score']}
+#     this_scores = pd.DataFrame(this_scores)
+#     train_preds = pd.DataFrame({k: scores['train'][k] for k in ['y_true', 'y_pred']})
+#     train_preds = pd.concat([tuabn_train.description, train_preds], axis=1)
+#     valid_preds = pd.DataFrame({k: scores[test_name(final_eval)][k] for k in ['y_true', 'y_pred']})
+#     valid_preds = pd.concat([tuabn_valid.description, valid_preds], axis=1)
+#     return train_preds, valid_preds, this_scores
     
     
 def create_final_scores(
@@ -1333,28 +1358,55 @@ def create_final_scores(
     target_scaler,
     data_scaler,
     n_jobs,
-    return_y_yhat,
 ):
-    scores = {}
-    for ds_name, ds in [('train', tuabn_train), (test_name, tuabn_valid)]:
-        preds, targets = predict_ds(
-            estimator,
-            ds, 
-            target_name,
-            target_scaler,
-            data_scaler, 
-            n_jobs,
-            mem_efficient=True if target_name in ['age_clf'] else False,
-            trialwise=True,
-            average_time_axis=True,
-        )
-        if target_name == 'age':
-            score = mae(targets, preds, True)
-        else:
-            score = acc(targets, preds, True)
-        scores[ds_name] = score
-        logger.info(f"on {ds_name} reached {scores[ds_name]['score']:.2f} {scores[ds_name]['score_name']}")
-    return scores
+    train_preds, train_score = _create_final_scores(
+        estimator,
+        tuabn_train,
+        'train',
+        target_name,
+        target_scaler,
+        data_scaler,
+        n_jobs,
+    )
+    valid_preds, valid_score = _create_final_scores(
+        estimator,
+        tuabn_valid,
+        test_name,
+        target_name,
+        target_scaler,
+        data_scaler,
+        n_jobs,
+    )
+    scores = pd.concat([train_score, valid_score], axis=1)
+    return train_preds, valid_preds, scores
+
+
+def _create_final_scores(
+    estimator,
+    ds,
+    ds_name,
+    target_name,
+    target_scaler,
+    data_scaler,
+    n_jobs,
+):
+    preds, targets = predict_ds(
+        estimator,
+        ds, 
+        target_name,
+        target_scaler,
+        data_scaler, 
+        n_jobs,
+        mem_efficient=True if target_name in ['age_clf'] else False,
+        trialwise=True,
+        average_time_axis=True,
+    )
+    score = mae(y_true=targets, y_pred=preds) if target_name == 'age' else acc(y_true=targets, y_pred=preds)
+    score_name = 'mae' if target_name == 'age' else 'acc'
+    logger.info(f"on {ds_name} reached {score:.2f} {score_name}")
+    preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})
+    score = pd.DataFrame({ds_name: {score_name: score}})
+    return preds, score
 
 
 def generate_splits(n_datasets, n_jobs):
@@ -1618,7 +1670,6 @@ def predict_longitudinal_datasets(
                 mapping=None,
                 tuabn=ds,
                 window_size_samples=window_size_samples,
-                n_channels=n_channels,
                 n_jobs=n_jobs,
                 preload=preload,
                 n_preds_per_input=n_preds_per_input,
@@ -1657,6 +1708,25 @@ def load_exp(
         target_scaler = pickle.load(f)
     config = pd.read_csv(os.path.join(base_dir, exp, 'config.csv'), index_col=0).squeeze()
     return clf, data_scaler, target_scaler, config
+
+
+def plot_learning_curves(histories, loss_name, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1,1,figsize=(12,3))
+    for history in histories:
+        ax = sns.lineplot(data=history, y='train_loss', x='epoch', ax=ax, c='g', linewidth=.5)
+        ax = sns.lineplot(data=history, y='valid_loss', x='epoch', ax=ax, c='orange', linewidth=.5)
+
+    mean_train_loss = np.mean([history['train_loss'] for history in histories], axis=0)
+    sns.lineplot(x=history['epoch'], y=mean_train_loss, linestyle='--', c='g', 
+                 label=f'train ({mean_train_loss[-1]:.5f})')
+    mean_valid_loss = np.mean([history['valid_loss'] for history in histories], axis=0)
+    sns.lineplot(x=history['epoch'], y=mean_valid_loss, linestyle='--', c='orange', 
+                 label=f'valid ({mean_valid_loss[-1]:.5f})')
+    ax.set_ylabel(loss_name)
+    ax.set_xlabel('Epoch')
+    ax.legend()
+    return ax
 
 
 def plot_learning(
@@ -1945,24 +2015,24 @@ def create_grid(hist_max_count, max_age):
     fig, ax = plt.subplots(1, 1, figsize=(18,18))
     gridx = 14
     gridy = 28
-    ax0 = plt.subplot2grid((gridx, gridy), (0, 4), colspan=10, rowspan=2)
-    ax1 = plt.subplot2grid((gridx, gridy), (0, 16), colspan=10, rowspan=2)
+    ax0 = plt.subplot2grid((gridx, gridy), (0, 4), rowspan=2, colspan=10)
+    ax1 = plt.subplot2grid((gridx, gridy), (0, 16), rowspan=2,  colspan=10)
     ax2 = plt.subplot2grid((gridx, gridy), (2, 0), rowspan=5, colspan=4)
     ax2.invert_xaxis()
     ax3 = plt.subplot2grid((gridx, gridy), (2, 4), rowspan=5, colspan=10)
     ax4 = plt.subplot2grid((gridx, gridy), (2, 16), rowspan=5, colspan=10)
-    ax5 = plt.subplot2grid((gridx, gridy), (2, 14), colspan=1, rowspan=5)
-    ax6 = plt.subplot2grid((gridx, gridy), (2, 26), colspan=1, rowspan=5)
-    ax7 = plt.subplot2grid((gridx, gridy), (0, 1), colspan=1, rowspan=1)
+    ax5 = plt.subplot2grid((gridx, gridy), (2, 14), rowspan=5, colspan=1)
+    ax6 = plt.subplot2grid((gridx, gridy), (2, 26), rowspan=5, colspan=1)
+    ax7 = plt.subplot2grid((gridx, gridy), (0, 1), rowspan=1, colspan=1)
 
     facecolor = 'white'
-    ax0.set_title('Test1')
+    ax0.set_title('')
     ax0.set_xlim(0, max_age)
     ax0.set_ylim([0, hist_max_count])
     ax0.set_xticklabels([])
     ax0.set_xlabel(' ')
     ax0.set_facecolor(facecolor)
-    ax1.set_title('Test2')
+    ax1.set_title('')
     ax1.set_xlim(0, max_age)
     ax1.set_ylim([0, hist_max_count])
     ax1.set_xticklabels([])
@@ -2000,16 +2070,33 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax=None, ax=None):
                      cbar_ax=cbar_ax, cbar_kws={'aspect': 50, 'fraction': 0.05})
     ax.invert_yaxis()
     
+    # add cbar max as text
+    cbar_ax.set_yticks(list(cbar_ax.get_yticks())[:-1] + [cbar_ax.get_ylim()[1]])
+    cbar_ax.set_ylabel('Count')
+    
     ax.scatter(
         df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size, 
         marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
         s=250, edgecolor='k', zorder=3)
     
-    # TODO: double and triple check why i need to swap y_true and y_pred x and y here
+    # TODO: double and triple check why y_true and y_pred x and y here need to be swapped
     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
     ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, #linestyle='--',
             c='magenta' if cmap == 'Reds' else 'cyan')
     
+    # add error to trendline
+    # does not really make sense
+#     mae = mean_absolute_error(df.y_true, df.y_pred)
+#     ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b + mae/bin_size, linewidth=.2, #linestyle=':',
+#         c='magenta' if cmap == 'Reds' else 'cyan')
+#     ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b - mae/bin_size, linewidth=.2, #linestyle=':',
+#         c='magenta' if cmap == 'Reds' else 'cyan')
+
+    # for every chronological age plot mean decoded age
+#     ax.plot((df[['y_true', 'y_pred']]/bin_size).sort_values('y_true').groupby('y_true', as_index=False).mean().y_true, 
+#             (df[['y_true', 'y_pred']]/bin_size).sort_values('y_true').groupby('y_true', as_index=False).mean().y_pred,
+#             c='magenta' if cmap == 'Reds' else 'cyan', linewidth=.5)
+
 #     ax.axvline(df.y_true.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
 #     ax.axhline(df.y_pred.mean()/bin_size, linestyle='--', color='r' if cmap == 'Reds' else 'b')
 
@@ -2029,38 +2116,49 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax=None, ax=None):
 
 
 def plot_heatmaps(df, bin_size, max_age, hist_max_count):
+    assert max_age == 100
+    assert max_age % bin_size == 0
     fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = create_grid(hist_max_count, max_age)
     
+    df_p = df[df.pathological]
+    df_np = df[~df.pathological]
     import matplotlib.patches as mpatches
-    blue_patch = mpatches.Patch(color='b', label='False', alpha=.5)
-    red_patch = mpatches.Patch(color='r', label='True', alpha=.5)
-    ax7.legend(handles=[blue_patch, red_patch], title='Pathological')
+    patches = []
+    if not df_np.empty:
+        mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
+        patches.append(mpatches.Patch(color='b', label=f'False\n({mae_non_patho:.2f} years mae)', alpha=.5))
+    if not df_p.empty:
+        mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
+        patches.append(mpatches.Patch(color='r', label=f'True\n({mae_patho:.2f} years mae)', alpha=.5))
+    ax7.legend(handles=patches, title='Pathological')
 
     bins = np.arange(0, 100, 5)
-    sns.histplot(df[~df.pathological].y_true, ax=ax0, color='b', kde=True, bins=bins)
-    ax0.axvline(df[~df.pathological].y_true.mean(), c='cyan')
-    sns.histplot(df[df.pathological].y_true, ax=ax1, color='r', kde=True, bins=bins)
-    ax1.axvline(df[df.pathological].y_true.mean(), c='magenta')
+    sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
+    ax0.axvline(df_np.y_true.mean(), c='cyan')
+    sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
+    ax1.axvline(df_p.y_true.mean(), c='magenta')
 
-    sns.histplot(data=df, y='y_pred', ax=ax2, hue='pathological', palette=['b', 'r'], kde=True, bins=bins)
+    sns.histplot(data=df_np, y='y_pred', ax=ax2, color='b', kde=True, bins=bins)
+    sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
     ax2.axhline(df[~df.pathological].y_pred.mean(), c='cyan')
-    ax2.axhline(df[df.pathological].y_pred.mean(), c='magenta')
-    ax2.set_yticks([int(i) for i in np.linspace(0, 100, 11)])
-    ax2.set_yticklabels([str(i) for i in np.linspace(0, 100, 11, dtype=int)])
+    ax2.axhline(df_p.y_pred.mean(), c='magenta')
+    ax2.set_xticks(ax0.get_yticks()[:-1])
+    ax2.set_yticks(np.linspace(0, 100, 11, dtype='int'))
     ax2.legend()
     
+    # TODO: right histogram is one col too wide?
     sns.lineplot(x=[0, 100], y=[0, 100], ax=ax3, c='k', linewidth=1)
-    sns.scatterplot(data=df[~df.pathological][['y_pred', 'y_true']].mean().to_frame().T, 
+    sns.scatterplot(data=df_np[['y_pred', 'y_true']].mean().to_frame().T, 
                     x='y_true', y='y_pred', ax=ax3, c='cyan', marker='*', s=300)
     sns.lineplot(x=[0, 100], y=[0, 100], ax=ax4, c='k', linewidth=1)
-    sns.scatterplot(data=df[df.pathological][['y_pred', 'y_true']].mean().to_frame().T, 
+    sns.scatterplot(data=df_p[['y_pred', 'y_true']].mean().to_frame().T, 
                     x='y_true', y='y_pred', ax=ax4, c='magenta', marker='*', s=300)
 
     Hs = []
-    dfs = [df[~df.pathological], df[df.pathological]]
+    dfs = [df_np, df_p]
     for this_df in dfs:
         if this_df.empty:
-            print("skipped")
+            Hs.append(None)
             continue
         # TODO: double and triple check why i need to swap y_true and y_pred x and y here
         H, xedges, yedges = np.histogram2d(
@@ -2068,7 +2166,7 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
             bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
         )
         Hs.append(H)
-    Hmax = max([H.max() for H in Hs])
+    Hmax = max([H.max() for H in Hs if H is not None])
 
 #     fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
 #     fig.tight_layout()
@@ -2088,7 +2186,11 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
             cbar_ax=cbar_ax,
         )
         mae = mean_absolute_error(this_df.y_true, this_df.y_pred)
-        axs2[i].set_title(f'Non-pathological\n({mae:.2f} years mae)' if i == 0 else f'Pathological\n({mae:.2f} years mae)')
+        # add error to diagonal
+#         sns.lineplot(x=[0, 100-mae/bin_size], y=[mae/bin_size, 100], ax=axs[i], c='k', linewidth=1, linestyle='--')
+#         sns.lineplot(x=[mae/bin_size, 100], y=[0, 100-mae/bin_size], ax=axs[i], c='k', linewidth=1, linestyle='--')
+#         axs2[i].set_title(
+#             f'Non-pathological\n({mae:.2f} years mae)' if i == 0 else f'Pathological\n({mae:.2f} years mae)')
     return fig
 
 
@@ -2137,7 +2239,7 @@ def plot_age_gap_hist(
 def plot_violin(y, sampled_y):
     fig, ax = plt.subplots(1, 1, figsize=(12, 3))
     ax.axvline(y, c='lightgreen')
-    ax = sns.violinplot(x=sampled_y, kde=True, color='g')
+    ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
@@ -2170,11 +2272,13 @@ def save_fig(
     
 
 if __name__ == "__main__":
+    # TODO: add exp to arguments?
     parser = argparse.ArgumentParser()
     # args for decoding
     parser.add_argument('--augment', type=str)
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--data-path', type=str)
+    parser.add_argument('--date', type=str)
     parser.add_argument('--debug', type=int)
     parser.add_argument('--fast-mode', type=int)
     parser.add_argument('--final-eval', type=int)
