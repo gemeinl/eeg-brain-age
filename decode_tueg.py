@@ -265,16 +265,27 @@ def decode_tueg(
     pred_path = os.path.join(out_dir, 'preds')
     if not os.path.exists(pred_path):
         os.makedirs(pred_path)
+    train_preds = pd.concat([train_preds, tuabn_train.description], axis=1)
     save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
+    valid_preds = pd.concat([valid_preds, tuabn_valid.description], axis=1)
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
+    
+    
+    # TODO: valid_rest and longitudinal datasets get the same treatment, so integrate valid rest in loop below
     # predict 'rest' dataset aka when selecting only normals, predict pathologicals and vice versa
+#     valid_rest_preds, valid_rest_score = predict_rest_dataset(
+#     )
     if valid_rest is not None:
+        ds_name = 'valid_rest'
+        logger.debug(f"{ds_name} (n={len(valid_rest.datasets)})")
+        logger.debug("preprocessing")
         valid_rest = preprocess(
             valid_rest, 
             preprocessors=get_preprocessors(tmin, tmax), 
             n_jobs=n_jobs,
         )
+        logger.debug("windowing")
         valid_rest = _create_windows(
             valid_rest,
             window_size_samples,
@@ -283,19 +294,57 @@ def decode_tueg(
             n_preds_per_input,
             mapping,
         )
+        logger.debug("predicting")
         valid_rest_preds, valid_rest_score = _create_final_scores(
             estimator,
             valid_rest,
-            'valid_rest',
+            ds_name,
             target_name,
             tuabn_train.target_transform,
             tuabn_train.transform[0],
             n_jobs,
         )
-        save_csv(valid_rest_preds, pred_path, 'train_end_valid_rest_preds.csv')
-        scores.update(valid_rest_score)
+        valid_rest_preds = pd.concat([valid_rest_preds, valid_rest.description], axis=1)
+        save_csv(valid_rest_preds, pred_path, f'train_end_{ds_name}_preds.csv')
+        scores = pd.concat([scores, valid_rest_score], axis=1)
         save_csv(scores, out_dir, 'train_end_scores.csv')
-    # TODO: predict longitudinal dataset
+    # TODO: predict_longitudinal_dataset()
+    # predict longitudinal datasets
+    for ds_name in ['transition', 'non_pathological', 'pathological']:
+        logger.debug(f"longitudinal {ds_name}")
+        with open(f'/work/longitudinal/{ds_name}.pkl', 'rb') as f:
+            long_ds = pickle.load(f)
+#         long_ds = long_ds.split(list(range(10)))['0']  # !!!!
+        logger.debug(f'n={len(long_ds.datasets)}')
+        logger.debug('preprocessing')
+        long_ds = preprocess(
+            long_ds, 
+            preprocessors=get_preprocessors(tmin, tmax), 
+            n_jobs=n_jobs,
+        )
+        logger.debug('creating windows')
+        long_ds = _create_windows(
+            long_ds,
+            window_size_samples,
+            n_jobs, 
+            preload,
+            n_preds_per_input,
+            mapping,
+        )
+        logger.debug('predicting')
+        long_ds_preds, long_ds_score = _create_final_scores(
+            estimator,
+            long_ds,
+            ds_name,
+            target_name,
+            tuabn_train.target_transform,
+            tuabn_train.transform[0],
+            n_jobs,
+        )
+        long_ds_preds = pd.concat([long_ds_preds, long_ds.description], axis=1)
+        save_csv(long_ds_preds, pred_path, f'train_end_{ds_name}_preds.csv')
+        scores = pd.concat([scores, long_ds_score], axis=1)
+        save_csv(scores, out_dir, 'train_end_scores.csv')
     logger.info('done.')
 
 
@@ -1404,7 +1453,7 @@ def _create_final_scores(
     score = mae(y_true=targets, y_pred=preds) if target_name == 'age' else acc(y_true=targets, y_pred=preds)
     score_name = 'mae' if target_name == 'age' else 'acc'
     logger.info(f"on {ds_name} reached {score:.2f} {score_name}")
-    preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})
+    preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})  # TODO: add dataset description to preds here
     score = pd.DataFrame({ds_name: {score_name: score}})
     return preds, score
 
@@ -2248,12 +2297,107 @@ def plot_violin(y, sampled_y):
             art.set_alpha(.5)
     ax.set_xlabel('Accuracy [%]')
     ax.legend(['actual', 'sampled'])
-    # offset = .04
-    # ax.text(acc, ax.get_ylim()[0]+offset, f'{acc:.2f}',
-    #         ha='center', va='top', fontweight='bold')
+    max_abs_lim = max([abs(i) for i in ax.get_xlim()])
+    ax.set_xlim(-max_abs_lim, max_abs_lim)
     ax.text(y, ax.get_ylim()[1], f'{y:.2f}',
             ha='center', va='bottom', fontweight='bold')
     return ax
+
+
+def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5,
+                fs=24, ylim=20, bins=np.linspace(0, 100, 101), out_dir=None,
+              show_title=True):
+    df = df_of_ages_genders_and_pathology_status
+    male_df = df[(df["gender"] == 0) | (df["gender"] == 'M')]
+    female_df = df[(df["gender"] == 1) | (df["gender"] == 'F')]
+
+    male_abnormal_df = male_df[male_df["pathological"] == 1]
+    male_normal_df = male_df[male_df["pathological"] == 0]
+    female_abnormal_df = female_df[female_df["pathological"] == 1]
+    female_normal_df = female_df[female_df["pathological"] == 0]
+
+    f, ax_arr = plt.subplots(ncols=2, sharey=True, sharex=False, figsize=(15, 18))
+    ax1, ax2 = ax_arr
+
+    if show_title:
+        plt.suptitle(train_or_eval+" Histogram", y=.9, fontsize=fs+5)
+
+    sns.histplot(
+        y=male_normal_df["age"], bins=bins, alpha=alpha, color="g",
+        orientation="horizontal", ax=ax1, kde=True,
+        label="Non-pathological ({:.1f}%)".format(len(male_normal_df) /
+                                                  len(male_df) * 100))
+    ax1.axhline(male_normal_df["age"].mean(), color='g')
+
+    sns.histplot(
+        y=male_abnormal_df["age"], bins=bins, alpha=alpha, color="b",
+        orientation="horizontal", ax=ax1, kde=True,
+        label="Pathological ({:.1f}%)".format(len(male_abnormal_df) /
+                                              len(male_df) * 100))
+    ax1.axhline(male_abnormal_df["age"].mean(), color='b')
+
+    ax1.axhline(np.mean(male_df["age"]), color="black",
+                # label="mean age {:.2f} $\pm$ {:.2f}".format(
+                #     np.mean(male_df["age"]), np.std(male_df["age"])))
+                label="Mean age {:.1f} ($\pm$ {:.1f})"
+                .format(np.mean(male_df["age"]), np.std(male_df["age"])))
+    ax1.barh(np.mean(male_df["age"]), height=2 * np.std(male_df["age"]),
+             width=ylim, color="black", alpha=.25)
+    ax1.set_xlim(0, ylim)
+
+    # handles, labels = plt.gca().get_legend_handles_labels()
+    # order = [2, 1, 0]
+    # plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
+
+    ax1.legend(fontsize=fs, loc="lower left")
+    ax1.set_title("Male ({:.1f}%)".format(100 * float(len(male_df) / len(df))),
+                  fontsize=fs, loc="left", y=.95, x=.05)
+    ax1.invert_xaxis()
+
+    # second axis
+    sns.histplot(
+        y=female_normal_df["age"], bins=bins, alpha=alpha, color="y",
+        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'},
+        label="Non-pathological ({:.1f}%)".format(len(female_normal_df) /
+                                                  len(female_df) * 100))
+    ax2.axhline(female_normal_df["age"].mean(), color='y', linestyle="--")
+
+    sns.histplot(
+        y=female_abnormal_df["age"], bins=bins, alpha=alpha, color="r",
+        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'},
+        label="Pathological ({:.1f}%)".format(len(female_abnormal_df) /
+                                              len(female_df) * 100))
+    ax2.axhline(female_abnormal_df["age"].mean(), color='r', linestyle="--")
+
+    ax2.axhline(np.mean(female_df["age"]), color="black", linestyle="--",
+                # label="mean age {:.2f} $\pm$ {:.2f}"
+                # .format(np.mean(female_df["age"]), np.std(female_df["age"])))
+                label="Mean age {:.1f} ($\pm$ {:.1f})"
+                .format(np.mean(female_df["age"]), np.std(female_df["age"])))
+    ax2.barh(np.mean(female_df["age"]), height=2 * np.std(female_df["age"]),
+             width=ylim, color="black",
+             alpha=.25)
+    ax2.legend(fontsize=fs, loc="lower right")
+    ax2.set_xlim(0, ylim)
+    # ax1.invert_yaxis()
+    ax2.set_title("Female ({:.1f}%)".format(100 * len(female_df) / len(df)),
+                  fontsize=fs, loc="right", y=.95, x=.95)  # , y=.005)
+
+    plt.ylim(0, 100)
+    plt.subplots_adjust(wspace=0, hspace=0)
+    ax1.set_ylabel("Age [years]", fontsize=fs)
+    ax1.set_xlabel("Count", fontsize=fs, x=1)
+    # ax1.yaxis.set_label_coords(-.025, 0)
+    plt.yticks(np.linspace(0, 100, 11), fontsize=fs - 5)
+    ax1.tick_params(labelsize=fs - 5)
+    ax2.tick_params(labelsize=fs - 5)
+    ax2.set_xlabel("")
+    # plt.savefig("tuh-abnormal-eeg-corpus-train-age-pyramid.pdf",
+    #             bbox_inches="tight")
+    if out_dir is not None:
+        plt.savefig(out_dir+"tuh_{}.png".format(train_or_eval),
+                    bbox_inches="tight")
+    return ax_arr
 
 
 def save_fig(
