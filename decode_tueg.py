@@ -27,7 +27,7 @@ sns.set_color_codes('deep')
 import matplotlib.pyplot as plt
 plt.style.use('seaborn')
 plt.set_loglevel('ERROR')
-from sklearn.metrics import mean_absolute_error, balanced_accuracy_score
+from sklearn.metrics import mean_absolute_error, balanced_accuracy_score, mean_absolute_percentage_error
 from sklearn.model_selection import train_test_split
 from sklearn.compose import TransformedTargetRegressor
 from skorch.helper import predefined_split
@@ -265,66 +265,28 @@ def decode_tueg(
     pred_path = os.path.join(out_dir, 'preds')
     if not os.path.exists(pred_path):
         os.makedirs(pred_path)
-    train_preds = pd.concat([train_preds, tuabn_train.description], axis=1)
     save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
-    valid_preds = pd.concat([valid_preds, tuabn_valid.description], axis=1)
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
-    
-    
-    # TODO: valid_rest and longitudinal datasets get the same treatment, so integrate valid rest in loop below
-    # predict 'rest' dataset aka when selecting only normals, predict pathologicals and vice versa
-#     valid_rest_preds, valid_rest_score = predict_rest_dataset(
-#     )
-    if valid_rest is not None:
-        ds_name = 'valid_rest'
-        logger.debug(f"{ds_name} (n={len(valid_rest.datasets)})")
-        logger.debug("preprocessing")
-        valid_rest = preprocess(
-            valid_rest, 
-            preprocessors=get_preprocessors(tmin, tmax), 
-            n_jobs=n_jobs,
-        )
-        logger.debug("windowing")
-        valid_rest = _create_windows(
-            valid_rest,
-            window_size_samples,
-            n_jobs, 
-            preload,
-            n_preds_per_input,
-            mapping,
-        )
-        logger.debug("predicting")
-        valid_rest_preds, valid_rest_score = _create_final_scores(
-            estimator,
-            valid_rest,
-            ds_name,
-            target_name,
-            tuabn_train.target_transform,
-            tuabn_train.transform[0],
-            n_jobs,
-        )
-        valid_rest_preds = pd.concat([valid_rest_preds, valid_rest.description], axis=1)
-        save_csv(valid_rest_preds, pred_path, f'train_end_{ds_name}_preds.csv')
-        scores = pd.concat([scores, valid_rest_score], axis=1)
-        save_csv(scores, out_dir, 'train_end_scores.csv')
-    # TODO: predict_longitudinal_dataset()
-    # predict longitudinal datasets
-    for ds_name in ['transition', 'non_pathological', 'pathological']:
-        logger.debug(f"longitudinal {ds_name}")
-        with open(f'/work/longitudinal/{ds_name}.pkl', 'rb') as f:
-            long_ds = pickle.load(f)
-#         long_ds = long_ds.split(list(range(10)))['0']  # !!!!
-        logger.debug(f'n={len(long_ds.datasets)}')
+    # predict valid rest and longitudinal datasets
+    for ds_name in ['valid_rest', 'transition', 'non_pathological', 'pathological']:
+        if ds_name == 'valid_rest':
+            ds = valid_rest
+        else:
+            with open(f'/work/longitudinal/{ds_name}.pkl', 'rb') as f:
+                ds = pickle.load(f)
+        if ds is None:
+            continue
+        logger.debug(f"dataset {ds_name} n={len(ds.datasets)}")
         logger.debug('preprocessing')
-        long_ds = preprocess(
-            long_ds, 
+        ds = preprocess(
+            ds, 
             preprocessors=get_preprocessors(tmin, tmax), 
             n_jobs=n_jobs,
         )
-        logger.debug('creating windows')
-        long_ds = _create_windows(
-            long_ds,
+        logger.debug('windowing')
+        ds = _create_windows(
+            ds,
             window_size_samples,
             n_jobs, 
             preload,
@@ -332,18 +294,17 @@ def decode_tueg(
             mapping,
         )
         logger.debug('predicting')
-        long_ds_preds, long_ds_score = _create_final_scores(
+        ds_preds, ds_score = _create_final_scores(
             estimator,
-            long_ds,
+            ds,
             ds_name,
             target_name,
             tuabn_train.target_transform,
             tuabn_train.transform[0],
             n_jobs,
         )
-        long_ds_preds = pd.concat([long_ds_preds, long_ds.description], axis=1)
-        save_csv(long_ds_preds, pred_path, f'train_end_{ds_name}_preds.csv')
-        scores = pd.concat([scores, long_ds_score], axis=1)
+        save_csv(ds_preds, pred_path, f'train_end_{ds_name}_preds.csv')
+        scores = pd.concat([scores, ds_score], axis=1)
         save_csv(scores, out_dir, 'train_end_scores.csv')
     logger.info('done.')
 
@@ -1154,6 +1115,7 @@ def get_callbacks(
 
 
 def mean_percentage_error(input, target):
+    # TODO: need to use absolute value?
     # does not seem to work well
     e = target-input
     return (target/e).mean()
@@ -1450,10 +1412,29 @@ def _create_final_scores(
         trialwise=True,
         average_time_axis=True,
     )
-    score = mae(y_true=targets, y_pred=preds) if target_name == 'age' else acc(y_true=targets, y_pred=preds)
-    score_name = 'mae' if target_name == 'age' else 'acc'
+    preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})  
+    preds = pd.concat([preds, ds.description], axis=1)
+    # always aggregate to subject-wise score
+    subject_wise = True
+    if target_name == 'age':
+        score_name = 'mae'
+        if subject_wise:
+            score = mae(
+                y_true=preds[['y_true', 'subject']].groupby('subject').mean(),
+                y_pred=preds[['y_pred', 'subject']].groupby('subject').mean(),
+            )
+        else:
+            score = mae(y_true=preds['y_true'], y_pred=preds['y_pred'])
+    else:
+        score_name = 'acc'
+        if subject_wise:
+            score = acc(
+                y_true=preds[['y_true', 'subject']].groupby('subject').mean(),
+                y_pred=preds[['y_pred', 'subject']].groupby('subject').mean(),
+            )
+        else:
+            score = acc(y_true=preds['y_true'], y_pred=preds['y_pred'])
     logger.info(f"on {ds_name} reached {score:.2f} {score_name}")
-    preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})  # TODO: add dataset description to preds here
     score = pd.DataFrame({ds_name: {score_name: score}})
     return preds, score
 
