@@ -273,6 +273,7 @@ def decode_tueg(
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
     
+    # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
     # predict valid rest and longitudinal datasets
     for ds_name in ['valid_rest', 'transition', 'non_pathological', 'pathological']:
@@ -731,7 +732,9 @@ def get_n_preds_per_input(
         n_channels,
         window_size_samples,
     ):
-    n_preds_per_input = model(torch.ones(1, n_channels, window_size_samples, 1).to(next(model.parameters()).device)).size()[2]
+    n_preds_per_input = model(
+        torch.ones(1, n_channels, window_size_samples, 1).to(next(model.parameters()).device)
+    ).size()[2]
     logger.debug(f"model produces {n_preds_per_input} preds for every input of size {window_size_samples}")
     return n_preds_per_input
 
@@ -852,73 +855,76 @@ class DataScaler():
         return (x * self.avg_ch_std) + self.avg_ch_mean
 
 
-def sine_scale(y, miny, maxy):
-    y = y - miny
-    y = y / (maxy - miny)
-    y = y * np.pi
-    y = y + np.pi
-    y = np.cos(y)
-    y = y + 1 
-    y = y / 2
-    return y
+# def sine_scale(y, miny, maxy):
+#     y = y - miny
+#     y = y / (maxy - miny)
+#     y = y * np.pi
+#     y = y + np.pi
+#     y = np.cos(y)
+#     y = y + 1 
+#     y = y / 2
+#     return y
 
 
-def inv_sine_scale(y, miny, maxy):
-    y = y * 2
-    y = y - 1
-    # y could be outside of [-1,1]
-    # in those cases, arccos fails
-    # how to handle?
-    y = np.arccos(y)
-    y = y - np.pi
-    y = y / np.pi
-    y = y * (maxy + miny)
-    y = y + miny
-    return -y
+# def inv_sine_scale(y, miny, maxy):
+#     y = y * 2
+#     y = y - 1
+#     # y could be outside of [-1,1]
+#     # in those cases, arccos fails
+#     # how to handle?
+#     y = np.arccos(y)
+#     y = y - np.pi
+#     y = y / np.pi
+#     y = y * (maxy + miny)
+#     y = y + miny
+#     return -y
 
     
 class TargetScaler():
-    def __init__(self, add_element=0, mult_element=1, kind='standard'):
+    def __init__(self, add_element=0, mult_element=1, kind='minmax'):
         self.add_element = add_element
         self.mult_element = mult_element
         self.kind = kind
 
     def __call__(self, y):
-        if self.kind == 'standard':
-            return (y - self.add_element) / self.mult_element
-            raise NotImplementedError
-        elif self.kind == 'exponential':
-            return np.power(((y - self.add_element) / self.mult_element), self.exp)
-            raise NotImplementedError
-        elif self.kind == 'sine':
-            return sine_scale(y, self.add_element, self.mult_element)
-        elif self.kind == 'percentage':
-            raise NotImplementedError
-        elif self.kind == 'sigmoid':
-            torch.special.expit((y - self.add_element) / self.mult_element)
-            raise NotImplementedError
+#         if self.kind == 'standard':
+#             return (y - self.add_element) / self.mult_element
+#         elif self.kind == 'exponential':
+#             return np.power(((y - self.add_element) / self.mult_element), self.exp)
+#             raise NotImplementedError
+#         elif self.kind == 'sine':
+#             return sine_scale(y, self.add_element, self.mult_element)
+#         elif self.kind == 'percentage':
+#             raise NotImplementedError
+#         elif self.kind == 'sigmoid':
+#             torch.special.expit((y - self.add_element) / self.mult_element)
+#             raise NotImplementedError
         if self.kind == 'minmax':
             scale = (self.add_element / ((self.mult_element - self.add_element)))
             return (y / (self.mult_element - self.add_element)) - scale
+        else:
+            raise NotImplementedError
 
     def invert(self, y):
-        if self.kind == 'standard':
-            return y * self.mult_element + self.add_element
-        elif self.kind == 'exponential':
-            raise NotImplementedError
-            return (np.power(y, 1/self.exp) * self.mult_element) + self.add_element
-        elif self.kind == 'sine':
-            raise NotImplementedError
-            return inv_sine_scale(y, self.add_element, self.mult_element) 
-        elif self.kind == 'percentage':
-            raise NotImplementedError
-        elif self.kind == 'sigmoid':
-            torch.special.logit(y * self.mult_element + self.add_element)
-            raise NotImplementedError
+#         if self.kind == 'standard':
+#             return y * self.mult_element + self.add_element
+#         elif self.kind == 'exponential':
+#             raise NotImplementedError
+#             return (np.power(y, 1/self.exp) * self.mult_element) + self.add_element
+#         elif self.kind == 'sine':
+#             raise NotImplementedError
+#             return inv_sine_scale(y, self.add_element, self.mult_element) 
+#         elif self.kind == 'percentage':
+#             raise NotImplementedError
+#         elif self.kind == 'sigmoid':
+#             torch.special.logit(y * self.mult_element + self.add_element)
+#             raise NotImplementedError
         if self.kind == 'minmax':
             scale = (self.add_element / ((self.mult_element - self.add_element)))
             return (y + scale) * (self.mult_element - self.add_element)
         # TODO: check inversion of minmax scale! seemed ok
+        else:
+            raise NotImplementedError
 
 
 def standardize(
@@ -1179,24 +1185,24 @@ def get_callbacks(
     return callbacks
 
 
-def mean_percentage_error(input, target):
-    # TODO: need to use absolute value?
-    # does not seem to work well
-    e = target-input
-    return (target/e).mean()
+# def mean_percentage_error(input, target):
+#     # TODO: need to use absolute value?
+#     # does not seem to work well
+#     e = target-input
+#     return (target/e).mean()
 
 
-def mean_squared_percentage_error(input, target):
-    # does not seem to work well
-    e = target-input
-    return (target/e*target/e).mean()
+# def mean_squared_percentage_error(input, target):
+#     # does not seem to work well
+#     e = target-input
+#     return (target/e*target/e).mean()
 
 
-def log_cosh_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    # https://datascience.stackexchange.com/questions/96271/logcoshloss-on-pytorch
-    def _log_cosh(x: torch.Tensor) -> torch.Tensor:
-        return x + torch.nn.functional.softplus(-2. * x) - math.log(2.0)
-    return torch.mean(_log_cosh(input - target))
+# def log_cosh_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+#     # https://datascience.stackexchange.com/questions/96271/logcoshloss-on-pytorch
+#     def _log_cosh(x: torch.Tensor) -> torch.Tensor:
+#         return x + torch.nn.functional.softplus(-2. * x) - math.log(2.0)
+#     return torch.mean(_log_cosh(input - target))
 
 
 def get_estimator(
@@ -1390,40 +1396,6 @@ def save_log(
     with open(os.path.join(out_dir, 'log.txt'), 'w') as f:
         f.writelines(log_contents)
 
-
-# TODO: rewrite to only have one input dataset
-# def make_final_predictions(
-#     estimator,
-#     tuabn_train,
-#     tuabn_valid,
-#     final_eval,
-#     target_name,
-#     n_jobs,
-# ):
-#     # TODO: add window preds?
-#     # TODO: add pathological and gender to preds df csv
-#     scores = create_final_scores(
-#         estimator,
-#         tuabn_train,
-#         tuabn_valid,
-#         test_name(final_eval),
-#         target_name,
-#         tuabn_train.target_transform,
-#         tuabn_train.transform[0],  # TODO: make sure to use .transform[0] also elsewhere
-#         n_jobs,
-#         return_y_yhat=True,
-#     )
-#     logger.info(f'made final predictions')
-#     this_scores = {}
-#     for ds_name, score in scores.items():
-#         this_scores[ds_name] = {score['score_name']: score['score']}
-#     this_scores = pd.DataFrame(this_scores)
-#     train_preds = pd.DataFrame({k: scores['train'][k] for k in ['y_true', 'y_pred']})
-#     train_preds = pd.concat([tuabn_train.description, train_preds], axis=1)
-#     valid_preds = pd.DataFrame({k: scores[test_name(final_eval)][k] for k in ['y_true', 'y_pred']})
-#     valid_preds = pd.concat([tuabn_valid.description, valid_preds], axis=1)
-#     return train_preds, valid_preds, this_scores
-    
     
 def create_final_scores(
     estimator,
@@ -1569,173 +1541,6 @@ def _predict_ds(
     return preds, targets
 
 
-# def generate_outputs(
-#     target_name,
-#     intuitive_training_scores,
-#     tuabn_valid,
-#     data_transform,
-#     target_transform,
-#     tuabn_train,
-#     fast_mode,
-#     title,
-#     out_dir,
-#     estimator,
-#     test_name,
-#     standardize_targets,
-#     augmenter,
-# ):
-#     # TODO: always make interpretable predictions after fast mode training
-#     # TODO: make predictions when decoding pathology
-#     logger.debug("generating outputs")
-#     df = pd.DataFrame(estimator.history)
-#     df.to_csv(os.path.join(out_dir, 'history.csv'))
-#     with open(os.path.join(out_dir, 'data_scaler.pkl'), 'wb') as f:
-#         pickle.dump(data_transform, f)
-#     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
-#         pickle.dump(target_transform, f)
-#     mean_train_age = tuabn_train.description['age'].mean()
-#     std_train_age = tuabn_train.description['age'].std()
-#     name = 'age' if target_name == 'age_clf' else target_name
-#     # matplotlib creates a massive amount of output at level debug, therefore overwrite it
-#     if target_name == 'age':
-#         loss_key = 'loss' if not intuitive_training_scores or fast_mode == 1 else 'age_mae'
-#         loss_name = 'mse loss' if not intuitive_training_scores or fast_mode == 1 else 'MAE [years]'
-#         # dummy score is mean train age predicted for all valid trials
-#         if not intuitive_training_scores or fast_mode == 1:
-#             # TODO: check
-#             y_pred_ = mean_train_age if not standardize_targets else 0
-#             y_pred = len(tuabn_valid.get_metadata())*[y_pred_]
-#             y_true = target_transform(tuabn_valid.get_metadata()['target'])
-#         else:
-#             y_pred = len(tuabn_valid.description)*[mean_train_age]
-#             y_true = tuabn_valid.description['age']
-#         dummy_score = mean_absolute_error(
-#             y_pred=y_pred,
-#             y_true=y_true,
-#         )
-#     elif target_name in ['gender', 'pathological', 'age_clf']:
-#         loss_key = 'misclass' if fast_mode == 0 else 'loss'
-#         loss_name = '1 - Accuracy' if fast_mode == 0 else 'NLLLoss'
-#         # dummy score is the less frequent class in train predicted for all valid trials
-#         class_distribution = tuabn_train.description[name].value_counts()/len(tuabn_train.description)
-#         label = class_distribution.idxmin()
-#         logger.debug(f'min class dist {label}')
-#         dummy_score = 1 - balanced_accuracy_score(
-#             y_true=tuabn_valid.description[name], 
-#             y_pred=[label]*len(tuabn_valid.description),
-#         )
-#     logger.debug(f'learning dummy score {dummy_score}')
-#     fig, ax = plt.subplots(1, 1, figsize=(15,3))
-#     ax = plot_learning(
-#         df=df,
-#         loss_key=loss_key,
-#         loss_name=loss_name,  # TODO: update loss name to input huber, mae, mse....
-#         dummy_score=dummy_score,
-#         dummy_score_name='dummy',
-#         test_name=test_name,
-#         ax=ax,
-#     )
-#     ax.set_title(title)
-#     save_fig(fig, out_dir, 'curves')
-
-#     # skip everything below
-#     if fast_mode == 1:
-#         return
-
-#     # compute final window and rec predictions and store
-#     # add pathological, age, and gender since it is useful for post-hoc analysis
-#     # create some plots and also store. can also be created based on saved pred files
-#     if target_name in ['age', 'age_clf']:
-#         add_names = ['pathological', 'gender']
-#     elif target_name in ['pathological', 'gender']:
-#         add_names = ['age', 'pathological'] if target_name == 'gender' else ['age', 'gender']
-        
-#     if target_name == 'age':
-#         n_x, n_y = 2, 2
-#         fig, ax_arr = plt.subplots(n_x, n_y, figsize=(15, 4), sharex=True, sharey=True)
-#         fig2, ax_arr2 = plt.subplots(n_x, n_y, figsize=(12, 12), sharex=True, sharey=True)
-#     for x, kind in enumerate(['window', 'trial']):
-#         for y, (ds_name, ds) in enumerate(zip(['train', 'valid'], [tuabn_train, tuabn_valid])):
-#             if kind == 'window':
-#                 y_pred = estimator.predict(ds).ravel()
-#                 if target_name == 'age':
-#                     y_pred = target_transform.invert(y_pred).ravel()
-#                 y_true = ds.get_metadata()['target'].to_numpy().ravel()
-#                 adds = [ds.get_metadata()[add_name].to_numpy().ravel() for add_name in add_names]
-#             else:
-#                 y_pred, y_true = estimator.predict_trials(ds)
-#                 # make sure there are no predictions outside expected range [0,1]
-#                 miny, maxy = 0, 1
-#                 if any([((y < miny) | (y > maxy)).any() for y in y_pred]):
-#                     logger.warning(f'Found {kind} prediction values outside expected range [{miny}, {maxy}]')
-#                 # y_pred: batch x n_classes x n_preds_per_input
-#                 y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
-#                 if x == 1 and y == 1:
-#                     logger.debug(f'some predictions {y_pred[:3]}')
-#                 if target_name == 'age':
-#                     y_pred = target_transform.invert(y_pred).ravel()
-#                     # make sure there are no predictions outside expected range [min/max train age]
-#                     if any([((y < target_transform.add_element) | (y > target_transform.mult_element)).any() for y in y_pred]):
-#                         logger.warning(f'Found {kind} prediction values outside expected range [{target_transform.add_element}, {target_transform.mult_element}] (min: {y_pred.min()}, max: {y_pred.max()})')
-#                     y_true = target_transform.invert(y_true).ravel()
-#                 elif target_name in ['pathological', 'gender']:
-#                     y_pred = y_pred.argmax(axis=1).ravel()
-#                 adds = [ds.description[add_name].to_numpy().ravel() for add_name in add_names]
-
-#             # assemble df and store
-#             d = np.vstack([y_pred, y_true] + adds).T
-#             pred_df = pd.DataFrame(data=d, columns=['y_pred', 'y_true'] + add_names)
-#             this_out_dir = os.path.join(out_dir, 'preds')
-#             if not os.path.exists(this_out_dir):
-#                 os.makedirs(this_out_dir)
-#             pred_df.to_csv(os.path.join(this_out_dir, f'{ds_name}_{kind}_preds.csv'))
-
-#             if target_name == 'age':
-#                 # visualize age gap proxy accuracy
-#                 ax = ax_arr[x, y]
-#                 # error prone. order matters. first train, then valid
-#                 if ds_name == 'train':
-#                     class_distribution = pred_df.pathological.value_counts()/len(pred_df)
-#                     label = class_distribution.idxmax()
-#                     # dummy is the more frequent class label in train assigned to all test examples 
-#                     #if y == 0:
-#                         #logger.debug(f"first: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
-#                     gap_dummy = balanced_accuracy_score(
-#                         y_pred=pred_df['pathological'].to_list(),
-#                         y_true=[label]*len(pred_df)
-#                     ) * 100
-#                 if x == 0 and y == 0:
-#                     logger.debug(f'age gap proxy dummy score {gap_dummy}')
-#                 plot_thresh_to_acc(pred_df, ax=ax, dummy=gap_dummy)
-#                 if y != 0:
-#                     ax.set_ylabel('')
-#                 if x != (n_x-1):
-#                     ax.set_xlabel('')
-#                 ax.set_title(f'{ds_name}, {kind}')
-#                 fig.subplots_adjust(wspace=.05)
-#                 save_fig(fig, out_dir, 'thresh_to_acc')
-
-#                 # visualize chronological vs predicted age
-#                 ax = ax_arr2[x, y]
-#                 # error prone. order matters. first train, then valid
-#                 if ds_name == 'train':
-#                     # dummy is the average train age
-#                     dummy = pred_df.y_true.mean()
-#                 if x == 0 and y == 0:
-#                     logger.debug(f'chronological vs predicted dummy {dummy:.2f}')
-#                 plot_chronological_vs_predicted_age(pred_df, ax=ax, dummy=dummy)
-#                 if y != 0:
-#                     ax.set_ylabel('')
-#                 if x != (n_x-1):
-#                     ax.set_xlabel('')
-#                 ax.set_ylim(-10,120)
-#                 ax.set_xlim(-10,110) 
-#                 ax.set_title(f'{ds_name}, {kind}')
-#                 fig2.subplots_adjust(wspace=.05)
-#                 fig2.subplots_adjust(hspace=.1)
-#                 save_fig(fig2, out_dir, 'chronological_vs_predicted_age')
-    
-
 def get_longitudinal_ds(kind, subset):
     try:
         ds_path = f'/work/longitudinal/{kind}.pkl'
@@ -1751,62 +1556,6 @@ def get_longitudinal_ds(kind, subset):
     if subset not in ['normal', 'abnormal', 'mixed']:
         ds = subselect(ds, subset)
     return ds
-
-
-# def predict_longitudinal_datasets(
-#     data_scaler,
-#     target_scaler,
-#     out_dir,
-#     tmin,
-#     tmax,
-#     n_jobs,
-#     window_size_samples,
-#     n_channels,
-#     n_preds_per_input,
-#     preload,
-# ):
-#     logger.info(f"predicting longitudinal datasets")
-#     for point in ['valid_best']:  # 'train_end', 'valid_best', checkpoint etc?
-#         clf_path = os.path.join(out_dir, 'checkpoint', f'{point}_model.pkl')
-#         if not os.path.exists(clf_path):
-#             logger.warning(f"{clf_path} not found")
-#             continue
-#         with open(clf_path, 'rb') as f:
-#             clf = pickle.load(f)
-#         for kind in ['transition', 'pathological', 'non_pathological']:
-#             ds = get_longitudinal_ds(kind)
-# #             if not os.path.exists(ds_path):
-# #                 logger.warning(f"{ds_path} not found")
-# #                 continue
-#             logger.debug(f"from model at {point} predicting longitudinal {kind}")
-#             # TODO: only use predict_ds, move windowing here
-#             ds = _create_windows(
-#                 mapping=None,
-#                 tuabn=ds,
-#                 window_size_samples=window_size_samples,
-#                 n_jobs=n_jobs,
-#                 preload=preload,
-#                 n_preds_per_input=n_preds_per_input,
-#             )
-#             trial_preds, trial_targets = predict_ds(
-#                 clf,
-#                 ds,
-#                 data_scaler,
-#                 target_scaler,
-#                 tmin,
-#                 tmax,
-#                 n_jobs,
-#                 window_size_samples,
-#                 n_channels,
-#                 n_preds_per_input,
-#                 preload,
-#             )
-#             out_path = os.path.join(out_dir, 'preds', f'{point}_longitudinal_{kind}_trial_preds.csv')
-#             # combine predictions with description dataframe
-#             df = ds.description
-#             df['y_pred'] = trial_preds
-#             df.to_csv(out_path)
-#             # TODO: plot_joint_scatter, plot_age_gap_hist
 
 
 def load_exp(
@@ -1985,140 +1734,6 @@ def plot_thresh_to_acc(
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
-
-
-# def plot_chronological_vs_predicted_age(
-#     df,
-#     dummy=None,
-#     ax=None,
-# ):
-#     if ax is None:
-#         fig, ax = plt.subplots(1, 1, figsize=(7, 7))
-    
-#     if df.pathological.nunique() == 1:
-#         color = 'b' if 0 in df.pathological.unique() else 'r'
-#         color2 = 'b' if 0 in df.pathological.unique() else 'r'
-#         label = 'non-pathological' if 0 in df.pathological.unique() else 'pathological' 
-#         ax.scatter(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), marker='.', s=5, c=color, label=label)
-#         # plot a trend line
-#         m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
-#         ax.plot(df.y_true, m*df.y_true + b, c=color2, label='trend', linewidth=1) 
-
-#     # order of plotting is a bit weird here to get the legend in the desired order...
-#     color_map = OrderedDict({'non-pathological': 'b', 'pathological': 'r'})
-#     if df.pathological.nunique() > 1:
-#         for patho_key, (patho, color) in enumerate(color_map.items()):
-#             this_df = df[df.pathological==patho_key]
-#             ax.scatter(this_df.y_true.to_numpy('int'), this_df.y_pred.to_numpy('float'), marker='.', s=5,
-#                        c=color, label=patho)
-
-#     ax.plot([0, 100], [0, 100], c='k', linewidth=1, label='identity')
-
-#     if df.pathological.nunique() > 1:
-#         for patho_key, (patho, color) in enumerate(color_map.items()):
-#             this_df = df[df.pathological==patho_key]
-#             m, b = np.polyfit(this_df.y_true.to_numpy('int'), this_df.y_pred.to_numpy('float'), 1)
-#             ax.plot(this_df.y_true, m*this_df.y_true + b, c=color, 
-#                     linewidth=1, label=f'{patho} trend')
-
-#     ax.set_xlabel('Chronological Age [years]')
-#     ax.set_ylabel('Decoded Age [years]')
-
-#     if dummy is not None:
-#         ax.axhline(dummy, label='dummy', c='m', linewidth=1)   
-
-#     ax.legend(ncol=2, loc='upper center')
-#     return ax
-
-
-# def plot_joint_scatter(
-#     all_preds_df,
-# ):
-#     grid = sns.jointplot(data=all_preds_df, x='y_pred', y='y_true', hue='pathological', alpha=.75, height=4.85)
-# #     sns.scatterplot(
-# #         data=all_preds_df.groupby('pathological', as_index=False).mean(),  # median looks better
-# #         ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
-# #         edgecolor='black', s=100, legend=False, alpha=.75,
-# #     )
-#     df = all_preds_df[all_preds_df.pathological]
-#     if not df.empty:
-#         m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
-#         grid.ax_joint.plot(df.y_true, m*df.y_true + b, label='trend', linewidth=1, c='g')
-#         sns.scatterplot(
-#             data=df.groupby('pathological', as_index=False).mean(),  # median looks better
-#             ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
-#             edgecolor='black', s=100, legend=False, alpha=.75, palette=['g'],
-#         )
-#     df = all_preds_df[~all_preds_df.pathological]
-#     if not df.empty:
-#         m, b = np.polyfit(df.y_true.to_numpy('int'), df.y_pred.to_numpy('float'), 1)
-#         grid.ax_joint.plot(df.y_true, m*df.y_true + b, label='trend', linewidth=1, c='b')
-#         sns.scatterplot(
-#             data=df.groupby('pathological', as_index=False).mean(),  # median looks better
-#             ax=grid.ax_joint, hue='pathological', x='y_pred', y='y_true', marker='^',
-#             edgecolor='black', s=100, legend=False, alpha=.75, palette=['b'],
-#         )
-    
-#     #grid.ax_joint.set_xlim(-25, 125)
-#     #grid.ax_joint.set_ylim(-25, 125)
-#     grid.ax_joint.plot([0,100],[0,100], c='m', linestyle='--')
-#     #grid.ax_joint.plot([0, 100], [0, 0], c='k')
-#     #grid.ax_joint.plot([0, 0], [0, 100], c='k')
-#     #grid.ax_joint.plot([0, 100], [100, 100], c='k')
-#     #grid.ax_joint.plot([100, 100], [0, 100], c='k')
-#     grid.ax_joint.set_xlabel('Decoded age [years]')
-#     grid.ax_joint.set_ylabel('Chronological age [years]')
-#     return grid
-
-
-# def jointplot(df):
-#     palette = sns.color_palette()
-#     grid = sns.JointGrid(height=5)
-#     sns.lineplot(x=[0, 100], y=[0, 100], ax=grid.ax_joint, color='magenta', linestyle='--')
-    
-#     x = 'y_pred'
-#     y = 'y_true'
-#     hue = 'pathological'
-#     max_age = 100
-#     df_non_patho = df[df.pathological == 0]
-#     df_patho = df[df.pathological == 1]
-#     non_patho_c = palette[0]
-#     patho_c = palette[1]
-#     non_patho_edge_c = 'black'
-#     patho_edge_c = 'white'
-#     sns.scatterplot(data=df_non_patho, x=x, y=y, ax=grid.ax_joint, ci=None,
-#                     edgecolor=non_patho_edge_c, alpha=.8, c=[non_patho_c])
-#     sns.scatterplot(data=df_patho, x=x, y=y, ax=grid.ax_joint, ci=None, 
-#                     edgecolor=patho_edge_c, alpha=.8, c=[patho_c])
-
-# #     for d in [df_non_patho, df_patho]:
-# #     if only pathological / non-pathological recs were decoded, d might be empty
-# #     if d.empty:
-# #         continue
-# #     color = palette[0] if 0 in d.pathological.unique() else palette[1]
-#     if not df_non_patho.empty:
-#         m, b = np.polyfit(df_non_patho.y_true.to_numpy('int'), df_non_patho.y_pred.to_numpy('float'), 1)
-#         grid.ax_joint.plot(m*df_non_patho.y_true + b, df_non_patho.y_true, linewidth=1, color=non_patho_c)
-
-#     if not df_patho.empty:
-#         m, b = np.polyfit(df_patho.y_true.to_numpy('int'), df_patho.y_pred.to_numpy('float'), 1)
-#         grid.ax_joint.plot(m*df_patho.y_true + b, df_patho.y_true, linewidth=1, color=patho_c)
-
-# #     sns.scatterplot(data=d.groupby(hue, as_index=False).mean(), 
-# #                     x=x, y=y, ax=grid.ax_joint, hue=hue, marker='^', 
-# #                     s=200, edgecolor='black')#, palette=[palette[0], palette[1]])
-
-#     sns.histplot(data=df_non_patho, y=y, ax=grid.ax_marg_y, kde=True, palette=[palette[0]],
-#                  legend=None, stat='density', bins=list(range(max_age)))
-#     sns.kdeplot(data=df_non_patho, y=y, ax=grid.ax_marg_y, legend=None, color='black')
-
-#     sns.histplot(data=df_patho, x=x, ax=grid.ax_marg_x, kde=True, palette=[palette[1]],
-#                  legend=None, stat='density', bins=list(range(max_age)))
-#     sns.kdeplot(data=df_patho, x=x, ax=grid.ax_marg_x, legend=None, color='black')
-
-#     grid.ax_joint.set_ylabel('Chronological Age [years]')
-#     grid.ax_joint.set_xlabel('Decoded Age [years]')
-#     return grid
 
 
 def create_grid(hist_max_count, max_age):
@@ -2314,7 +1929,7 @@ def plot_age_gap_hist(
     df,
     ax=None,
 ):
-    df['gap'] = df.y_true - df.y_pred
+#     df['gap'] = df.y_true - df.y_pred
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
     bin_width = 5
@@ -2340,13 +1955,49 @@ def plot_age_gap_hist(
 #                 ha='center', va='bottom')
     max_abs_gap = max(abs(df.gap))*1.1
     ax.set_xlim(-max_abs_gap, max_abs_gap)
-    ax.set_xlabel('Chronological Age - Decoded Age [years]')
+    ax.set_xlabel('Chronological Age − Decoded Age [years]')
     ax.set_title(f'Brain age gap')
     ax.legend(title='Pathological')
     return ax
 
 
-def plot_violin(y, sampled_y):
+def accuracy_perumtations(df, n_repetitions):
+#     df['gap'] = df.y_true - df.y_pred
+    accs = []
+    for thresh in df.gap:
+        acc = balanced_accuracy_score(df.pathological, df.gap > thresh) * 100
+        accs.append(acc)
+    orig_acc = max(accs)
+    
+    accs = []
+    for n in range(n_repetitions):
+        choices = np.random.choice(2, len(df))
+        acc = balanced_accuracy_score(df.pathological, choices)*100
+        accs.append(acc)
+    return orig_acc, accs
+
+
+def age_gap_diff_permutations(df, n_repetitions, subject_wise):
+    if subject_wise:
+        df = df.groupby(['subject', 'pathological'], as_index=False).mean(numeric_only=True)
+    gaps = df['gap']
+    # averaging above changes dtype of pathological from bool to float....
+    patho_df = df[df.pathological == 1]
+    non_patho_df = df[df.pathological == 0]
+    mean_patho_gap = patho_df['gap'].mean()
+    mean_non_patho_gap = non_patho_df['gap'].mean()
+    mean_gap_diff = mean_patho_gap - mean_non_patho_gap
+
+    mean_gap_diffs = []
+    for n in range(n_repetitions):
+        choices = np.random.choice(2, len(gaps))
+        gaps0 = gaps[choices==0]
+        gaps1 = gaps[choices==1]
+        mean_gap_diffs.append(gaps0.mean() - gaps1.mean())
+    return mean_gap_diff, mean_gap_diffs
+
+
+def plot_violin(y, sampled_y, xlabel, center_value=0):
     fig, ax = plt.subplots(1, 1, figsize=(12, 3))
     ax.axvline(y, c='lightgreen')
     ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
@@ -2356,10 +2007,10 @@ def plot_violin(y, sampled_y):
     for art in ax.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
-    ax.set_xlabel('Accuracy [%]')
-    ax.legend(['actual', 'sampled'])
-    max_abs_lim = max([abs(i) for i in ax.get_xlim()])
-    ax.set_xlim(-max_abs_lim, max_abs_lim)
+    ax.set_xlabel(xlabel)
+    ax.legend(['Observed', 'Sampled'])#, title='Mean Chronological Age - Predicted Age')
+    max_abs_lim = max([abs(center_value - i) for i in ax.get_xlim()])
+    ax.set_xlim(center_value-max_abs_lim, center_value+max_abs_lim)
     ax.text(y, ax.get_ylim()[1], f'{y:.2f}',
             ha='center', va='bottom', fontweight='bold')
     return ax
