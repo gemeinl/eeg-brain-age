@@ -140,7 +140,7 @@ def decode_tueg(
     cropped = True
     logger.debug(f"cropped: {cropped}")
 
-    tuabn_train, tuabn_valid, mapping, valid_rest  = get_datasets(
+    tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
         data_path, 
         target_name,
         subset,
@@ -276,8 +276,8 @@ def decode_tueg(
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
     # predict valid rest and longitudinal datasets
-    for ds_name in ['valid_rest', 'transition', 'non_pathological', 'pathological']:
-        if ds_name == 'valid_rest':
+    for ds_name in [valid_rest_name]:#, 'transition', 'non_pathological', 'pathological']:
+        if ds_name == valid_rest_name:
             ds = valid_rest
         else:
             ds = get_longitudinal_ds(ds_name, (min_age, max_age))
@@ -468,6 +468,33 @@ def get_train_valid_datasets(tuabn_train, target_name, valid_set_i, seed):
     return tuabn_train, tuabn_valid
 
 
+def match_pathological_distributions(d):
+    d_p = d[d.pathological]
+    d_n = d[~d.pathological]
+#     print(d_p.shape, d_n.shape)
+
+    max_age = max([d_p.age.max(), d_n.age.max()])
+
+    subsampled = []
+    for age in range(max_age+1):
+        d_p_n = d_p[d_p.age==age]
+        d_n_n = d_n[d_n.age==age]
+        min_n = min(len(d_p_n), len(d_n_n))
+#         print(age, min_n)
+        subsampled.append(d_p_n.head(min_n))
+        subsampled.append(d_n_n.head(min_n))
+    subsampled = pd.concat(subsampled)
+    return subsampled
+
+
+def subsample_uniformly(d):
+    min_age = 18
+    max_age = 86
+    n_per_age = 6
+    d_uniform = pd.concat([g.head(n_per_age) for n, g in d.groupby(['pathological', 'age']) if (n[1] >= min_age) and (n[1] <= max_age)], axis=0)
+    return d_uniform
+
+
 def get_datasets(
     data_path,
     target_name,
@@ -490,6 +517,22 @@ def get_datasets(
         n_jobs=n_jobs,
         target_name = 'age' if target_name in ['age', 'age_clf'] else target_name,
     )
+    
+    subsample = 'uniform'
+    if subsample != -1:
+        logger.info(f'subsampling age distributions for pathological and non-pathological recordings ({subsample})')
+        d = tuabn_train.description
+        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings in total')
+        if subsample == 'match':
+            d = match_pathological_distributions(d)
+        elif subsample == 'uniform':
+            d = subsample_uniformly(d)
+        else:
+            raise ValueError
+        tuabn_train = tuabn_train.split([d.sort_index().index.to_list()])['0']
+        d = tuabn_train.description
+        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
+        
     if final_eval == 1:
         logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
         tuabn_train, tuabn_valid = get_train_eval_datasets(tuabn_train, target_name)
@@ -515,7 +558,9 @@ def get_datasets(
         valid_rest = subselect(dataset=valid_rest, subset=(min_age, max_age))
         logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                      f" ({len(tuabn_valid.datasets)})")
-        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
+
+    valid_rest_name = f'valid_not_{subset}'
+    logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # reduce number of train recordings
     if n_train_recordings != -1:
@@ -541,7 +586,7 @@ def get_datasets(
         mapping = {'M': 0, 'F': 1}
     else:
         mapping = None
-    return tuabn_train, tuabn_valid, mapping, valid_rest
+    return tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name
 
 
 def subselect(
@@ -615,8 +660,6 @@ def get_model(
     if model_name == 'shallow':
         lr = 0.0625 * 0.01
         weight_decay = 0
-        n_start_channels = 40  # default
-        dropout = .5
         if target_name == 'age':
             n_classes = 1
             final_conv_length = 35
@@ -632,19 +675,15 @@ def get_model(
         model = ShallowFBCSPNet(
             in_chans=n_channels,
             n_classes=n_classes,
-            n_filters_time=n_start_channels,
-            n_filters_spat=n_start_channels,
             input_window_samples=window_size_samples,
             final_conv_length=final_conv_length,
-            drop_prob=dropout,
         )
     elif model_name == 'deep':
         lr = 0.01
         weight_decay = 0.5 * 0.001
-        n_start_channels = 25  # default
         final_conv_length = 1
-        dropout = .5
         if target_name == 'age':
+#             lr = 0.005  # magical robin notebook  # smoother curves, worse valid mae score
             n_classes = 1
         elif target_name == 'gender':
             n_classes = 2
@@ -657,9 +696,6 @@ def get_model(
             n_classes=n_classes,
             input_window_samples=window_size_samples,
             final_conv_length=final_conv_length,
-            n_filters_time=n_start_channels,
-            n_filters_spat=n_start_channels,
-            drop_prob=dropout,
             stride_before_pool=True,
         )
     elif model_name == 'tcn':
@@ -1676,8 +1712,8 @@ def plot_thresh_to_acc(
     # if we only decode normals or abnormals, this will raise 
     #if df.pathological.nunique() == 1:
     #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
-    sorted_gaps = (df['y_true'] - df['y_pred']).sort_values().to_numpy()
-    gaps = df['y_true'] - df['y_pred']
+    sorted_gaps = df['gap'].sort_values().to_numpy()
+    gaps = df['gap']
 
     accs = []
     for thresh in sorted_gaps:
@@ -1687,12 +1723,22 @@ def plot_thresh_to_acc(
         accs.append(
             balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
         )
-    df = pd.DataFrame([sorted_gaps, accs, y_true]).T
-    df.columns = ['thresh', 'acc', 'pathological']
-    df['acc'] *= 100
+    gap_df = pd.DataFrame([sorted_gaps, accs, y_true]).T
+    gap_df.columns = ['thresh', 'acc', 'pathological']
+    gap_df['acc'] *= 100
 
     if ax is None:
-        fig, ax = plt.subplots(1,1,figsize=(12,3))
+        fig, ax1 = plt.subplots(1,1,figsize=(12,3))
+
+    # combine age gap hist with thresh to acc curve by creating a twin axis
+    ax1 = plot_age_gap_hist(df, bin_width=1, ax=ax1)
+    # ax is thresh curve, ax1 is histogram
+    ax = ax1.twinx()
+    # https://stackoverflow.com/questions/26752464/how-do-i-align-gridlines-for-two-y-axis-scales-using-matplotlib
+    ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
+    ax1.legend(title='Pathological', loc='upper left')
+
+    df = gap_df
     if 0 not in df.pathological.unique():
         c='g' 
     elif 1 not in df.pathological.unique():
@@ -1700,40 +1746,124 @@ def plot_thresh_to_acc(
     else:
         c='k'
 
-    ax.plot(df['thresh'], df['acc'], c=c)#, zorder=3)  # does not make sense in mixed case
-    ax.fill_between(df['thresh'][df['thresh'] < sorted_gaps[df.acc.argmax()]],
-                    df['acc'][df['thresh'] < sorted_gaps[df.acc.argmax()]], 50, 
-                    color='b', label='False', alpha=.5)
-    ax.fill_between(df['thresh'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 
-                    df['acc'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 50,
-                    color='r', label='True', alpha=.5)
+    ax.plot(df['thresh'], df['acc'], c='lightgreen', label='Thresholds')#, zorder=3)  # does not make sense in mixed case
 
     ax.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Chronological Age – Decoded Age [years]')
-    ax.legend(title='Pathological')
+    ax.set_xlabel('Chronological Age − Decoded Age [years]')
+#     ax.legend(title='Pathological', loc='lower left')
 
     xlim = max(abs(sorted_gaps)) * 1.1
     ax.set_xlim(-xlim, xlim)
 
-    ax.plot([sorted_gaps[df.acc.argmax()], sorted_gaps[df.acc.argmax()]], 
-            [ax.get_ylim()[0],  df.acc.max()], c='lightgreen', linewidth=1)
-    ax.plot([ax.get_xlim()[0], sorted_gaps[df.acc.argmax()]], 
-            [df.acc.max(), df.acc.max()], c='lightgreen', linewidth=1)
-#     ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
-#     ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
-    ax.scatter(sorted_gaps[df.acc.argmax()], df.acc.max(), zorder=4, marker='*', 
-               c='lightgreen', s=20)
-
-    ax.text(sorted_gaps[df.acc.argmax()], ax.get_ylim()[0]-1.75, f"{sorted_gaps[df.acc.argmax()]:.2f}",
-            ha='center', va='top', fontweight='bold')#, c='lightgreen')
-    ax.text(ax.get_xlim()[0]-1.25, df.acc.max(), f"{df.acc.max():.2f}",
-            ha='right', va='center', fontweight='bold')#, c='lightgreen')
+    ax.scatter(
+        sorted_gaps[(df.acc - 50).abs().argmax()], 
+        df.acc[(df.acc - 50).abs().argmax()], 
+        zorder=4, marker='*',  c='orange', s=50,
+#         label=f'Best ({sorted_gaps[df.acc.argmax()]:.2f} years, {df.acc.max():.2f} %)'
+        label=f'Best ({sorted_gaps[(df.acc - 50).abs().argmax()]:.2f} , {df.acc[(df.acc - 50).abs().argmax()]:.2f})'
+    )
+    ax.legend(loc='upper right')
     
-    ax.set_yticks(ax.get_yticks()[:-2])
+#     # color the background
+#     ax1.set_facecolor('white')
+#     ax.set_facecolor('white')
+    ylim = ax.get_ylim()
+    ax.axhspan(
+        float(ax.get_yticks()[0]), float(ax.get_yticks()[-1]), xmax=1, 
+        xmin=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
+        facecolor='teal', alpha=.1, zorder=-100,
+    )
+    ax.axhspan(
+        float(ax.get_yticks()[0]), float(ax.get_yticks()[-1]), xmin=0, 
+        xmax=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.set_ylim(ylim)
+    
+    x1 = ax.get_xlim()[0] / 2
+    x2 = ax.get_xlim()[1] / 2
+    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/2
+    ax.text(x1, y, "Predicted Pathological", ha='right')
+    ax.text(x2, y, "Predicted Non-Pathological", ha='left')
+    
+    ax.set_title('Brain Age Gap Pathology Proxy')
+    ax1.set_title('')
+    
+#     ax1.grid(None)
+#     ax.xaxis.grid(True)
+#     ax.yaxis.grid(True)
     
     if dummy is not None:
         ax.axhline(dummy, c='m', linewidth=1)
     return ax
+
+
+# def plot_thresh_to_acc(
+#     df,
+#     ax=None,
+#     dummy=None,
+# ):
+#     # if we only decode normals or abnormals, this will raise 
+#     #if df.pathological.nunique() == 1:
+#     #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
+#     sorted_gaps = (df['y_true'] - df['y_pred']).sort_values().to_numpy()
+#     gaps = df['y_true'] - df['y_pred']
+
+#     accs = []
+#     for thresh in sorted_gaps:
+#         y_true=df['pathological'].to_numpy(dtype=int)
+#         y_pred=(gaps > thresh).to_numpy(dtype=int)
+#         #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
+#         accs.append(
+#             balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
+#         )
+#     df = pd.DataFrame([sorted_gaps, accs, y_true]).T
+#     df.columns = ['thresh', 'acc', 'pathological']
+#     df['acc'] *= 100
+
+#     if ax is None:
+#         fig, ax = plt.subplots(1,1,figsize=(12,3))
+#     if 0 not in df.pathological.unique():
+#         c='g' 
+#     elif 1 not in df.pathological.unique():
+#         c='b'
+#     else:
+#         c='k'
+
+#     ax.plot(df['thresh'], df['acc'], c=c)#, zorder=3)  # does not make sense in mixed case
+#     ax.fill_between(df['thresh'][df['thresh'] < sorted_gaps[df.acc.argmax()]],
+#                     df['acc'][df['thresh'] < sorted_gaps[df.acc.argmax()]], 50, 
+#                     color='b', label='False', alpha=.5)
+#     ax.fill_between(df['thresh'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 
+#                     df['acc'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 50,
+#                     color='r', label='True', alpha=.5)
+
+#     ax.set_ylabel('Accuracy [%]')
+#     ax.set_xlabel('Chronological Age – Decoded Age [years]')
+#     ax.legend(title='Pathological')
+
+#     xlim = max(abs(sorted_gaps)) * 1.1
+#     ax.set_xlim(-xlim, xlim)
+
+#     ax.plot([sorted_gaps[df.acc.argmax()], sorted_gaps[df.acc.argmax()]], 
+#             [ax.get_ylim()[0],  df.acc.max()], c='lightgreen', linewidth=1)
+#     ax.plot([ax.get_xlim()[0], sorted_gaps[df.acc.argmax()]], 
+#             [df.acc.max(), df.acc.max()], c='lightgreen', linewidth=1)
+# #     ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
+# #     ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
+#     ax.scatter(sorted_gaps[df.acc.argmax()], df.acc.max(), zorder=4, marker='*', 
+#                c='lightgreen', s=20)
+
+#     ax.text(sorted_gaps[df.acc.argmax()], ax.get_ylim()[0]-1.75, f"{sorted_gaps[df.acc.argmax()]:.2f}",
+#             ha='center', va='top', fontweight='bold')#, c='lightgreen')
+#     ax.text(ax.get_xlim()[0]-1.25, df.acc.max(), f"{df.acc.max():.2f}",
+#             ha='right', va='center', fontweight='bold')#, c='lightgreen')
+    
+#     ax.set_yticks(ax.get_yticks()[:-2])
+    
+#     if dummy is not None:
+#         ax.axhline(dummy, c='m', linewidth=1)
+#     return ax
 
 
 def create_grid(hist_max_count, max_age):
@@ -1927,12 +2057,11 @@ def plot_hist():
 
 def plot_age_gap_hist(
     df,
+    bin_width=5,
     ax=None,
 ):
-#     df['gap'] = df.y_true - df.y_pred
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
-    bin_width = 5
     bins = np.concatenate([
         np.arange(0, - df.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
         np.arange(bin_width, df.gap.max() + bin_width, bin_width, dtype=int)
@@ -1962,7 +2091,6 @@ def plot_age_gap_hist(
 
 
 def accuracy_perumtations(df, n_repetitions):
-#     df['gap'] = df.y_true - df.y_pred
     accs = []
     for thresh in df.gap:
         acc = balanced_accuracy_score(df.pathological, df.gap > thresh) * 100
@@ -2018,7 +2146,7 @@ def plot_violin(y, sampled_y, xlabel, center_value=0):
 
 def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5,
                 fs=24, ylim=20, bins=np.linspace(0, 100, 101), out_dir=None,
-              show_title=True):
+                show_title=True, show_pathology_legend=True):
     df = df_of_ages_genders_and_pathology_status
     male_df = df[(df["gender"] == 0) | (df["gender"] == 'M')]
     female_df = df[(df["gender"] == 1) | (df["gender"] == 'F')]
@@ -2037,15 +2165,17 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     sns.histplot(
         y=male_normal_df["age"], bins=bins, alpha=alpha, color="g",
         orientation="horizontal", ax=ax1, kde=True,
-        label="Non-pathological ({:.1f}%)".format(len(male_normal_df) /
-                                                  len(male_df) * 100))
+        label="Non-pathological ({:.1f}%)".format(
+            len(male_normal_df) / len(male_df) * 100) if show_pathology_legend else None,
+    )
     ax1.axhline(male_normal_df["age"].mean(), color='g')
 
     sns.histplot(
         y=male_abnormal_df["age"], bins=bins, alpha=alpha, color="b",
         orientation="horizontal", ax=ax1, kde=True,
-        label="Pathological ({:.1f}%)".format(len(male_abnormal_df) /
-                                              len(male_df) * 100))
+        label="Pathological ({:.1f}%)".format(
+            len(male_abnormal_df) / len(male_df) * 100) if show_pathology_legend else None,
+    )
     ax1.axhline(male_abnormal_df["age"].mean(), color='b')
 
     ax1.axhline(np.mean(male_df["age"]), color="black",
@@ -2069,16 +2199,18 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     # second axis
     sns.histplot(
         y=female_normal_df["age"], bins=bins, alpha=alpha, color="y",
-        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'},
-        label="Non-pathological ({:.1f}%)".format(len(female_normal_df) /
-                                                  len(female_df) * 100))
+        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'}, #kde_kws={'bw_adjust': 3},
+        label="Non-pathological ({:.1f}%)".format(
+            len(female_normal_df) / len(female_df) * 100) if show_pathology_legend else None,
+    )
     ax2.axhline(female_normal_df["age"].mean(), color='y', linestyle="--")
 
     sns.histplot(
         y=female_abnormal_df["age"], bins=bins, alpha=alpha, color="r",
-        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'},
-        label="Pathological ({:.1f}%)".format(len(female_abnormal_df) /
-                                              len(female_df) * 100))
+        orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'}, #kde_kws={'bw_adjust': 3},
+        label="Pathological ({:.1f}%)".format(
+            len(female_abnormal_df) / len(female_df) * 100) if show_pathology_legend else None,
+    )
     ax2.axhline(female_abnormal_df["age"].mean(), color='r', linestyle="--")
 
     ax2.axhline(np.mean(female_df["age"]), color="black", linestyle="--",
@@ -2125,7 +2257,66 @@ def save_fig(
             os.path.join(out_path, f'{title}.{file_type}'),
             bbox_inches='tight',
         )
-    
+
+
+def read_result(
+    exps_dir,
+    result,
+):
+    exp_dirs = os.listdir(exps_dir)
+    exp_results = []
+    for exp_dir in exp_dirs:
+        exp_dir = os.path.join(exps_dir, exp_dir)
+        folds = sorted(os.listdir(exp_dir))
+        cv_result = []
+        for valid_set_i in folds:
+            this_exp_dir = os.path.join(exp_dir, valid_set_i)
+            this_result = _read_result(this_exp_dir, result)
+            cv_result.append(this_result)
+        cv_result = pd.concat(cv_result, ignore_index=int(result == 'config'))
+        exp_results.append(cv_result)
+    exp_results = pd.concat(exp_results).sort_values(['seed', 'valid_set_i'])
+    return exp_results
+
+
+def _read_result(
+    exp_dir,
+    result,
+):
+    config_path = os.path.join(exp_dir, 'config.csv')
+    config = pd.read_csv(config_path, index_col=0).T
+    if result == 'history':
+        hist_path = os.path.join(exp_dir, 'history.csv')
+        this_result = pd.read_csv(hist_path, index_col=0)
+    elif result == 'score':
+        score_path = os.path.join(exp_dir, 'train_end_scores.csv')
+        this_result = pd.read_csv(score_path, index_col=0)
+    elif result == 'preds':
+        pred_path = os.path.join(exp_dir, 'preds', 'train_end_valid_preds.csv')
+        preds1 = pd.read_csv(pred_path, index_col=0)
+        preds1['subset'] = 'valid'
+        try:
+            pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_not_{config.squeeze()["subset"]}_preds.csv')
+            preds2 = pd.read_csv(pred_path, index_col=0)
+        except:
+            try:
+                pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_rest_preds.csv')
+                preds2 = pd.read_csv(pred_path, index_col=0)
+            except:
+                raise FileNotFoundError
+        preds2['subset'] = 'valid_rest'
+        # TODO: add longitudinal preds
+        this_result = pd.concat([preds1, preds2])
+        this_result['gap'] = this_result.y_true - this_result.y_pred
+    elif result == 'config':
+        this_result = config
+    else:
+        raise ValueError
+    if result != 'config':
+        this_result['seed'] = int(config['seed'])
+        this_result['valid_set_i'] = int(config['valid_set_i'])
+    return this_result
+
 
 if __name__ == "__main__":
     # TODO: add exp to arguments?
