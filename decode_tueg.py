@@ -390,7 +390,7 @@ def check_input_args(
     if loss not in ['mse', 'mae', 'log_cosh', 'huber', 'nll']:
         raise ValueError(f'Unkown loss {loss}')
     if target_name in ['pathological', 'gender', 'age_clf'] and loss != 'nll':
-        logger.warning(f"loss '{loss}' cannot be used with this target ({target_name})")
+        raise ValueError(f"loss '{loss}' cannot be used with this target ({target_name})")
     if squash_outs not in [0, 1]:
         raise ValueError
     if squash_outs == 1 and target_name != 'age':
@@ -436,10 +436,10 @@ def get_preprocessors(
     return preprocessors
 
 
-def get_train_eval_datasets(tuabn_train, target_name, seed):
+def get_train_eval_datasets(tuabn_train, target_name):
     if target_name in ['age', 'age_clf']:
         logger.debug(f"into train (0.9) and eval (0.1).")
-        train_ids, eval_ids = train_eval_split(tuabn_train.description, seed)
+        train_ids, eval_ids = train_eval_split(tuabn_train.description)
         intersection = np.intersect1d(train_ids, eval_ids)
         if intersection.any():
             raise RuntimeError(f"leakage train / eval detected {intersection}")
@@ -452,14 +452,14 @@ def get_train_eval_datasets(tuabn_train, target_name, seed):
     return tuabn_train, tuabn_eval
 
 
-def get_train_valid_datasets(tuabn_train, target_name, valid_set_i, seed):
+def get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
-    tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name, seed)
+    tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name)
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
     logger.debug(f"into train (.8) and valid (.2).")
     # for pathology decoding, turn off shuffling and make time series split chronologically
     shuffle = True if target_name in ['age', 'age_clf'] else False
-    train_ids, valid_ids = train_valid_split(tuabn_train.description, valid_set_i, seed, shuffle)
+    train_ids, valid_ids = train_valid_split(tuabn_train.description, valid_set_i, shuffle)
     intersection = np.intersect1d(train_ids, valid_ids)
     if intersection.any():
         raise RuntimeError(f"leakage train / valid detected {intersection}")
@@ -518,7 +518,7 @@ def get_datasets(
         target_name = 'age' if target_name in ['age', 'age_clf'] else target_name,
     )
     
-    subsample = 'uniform'
+    subsample = -1
     if subsample != -1:
         logger.info(f'subsampling age distributions for pathological and non-pathological recordings ({subsample})')
         d = tuabn_train.description
@@ -537,7 +537,7 @@ def get_datasets(
         logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
         tuabn_train, tuabn_valid = get_train_eval_datasets(tuabn_train, target_name)
     else:
-        tuabn_train, tuabn_valid = get_train_valid_datasets(tuabn_train, target_name, valid_set_i, seed)
+        tuabn_train, tuabn_valid = get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
 
     # select normal/abnormal only
     logger.info(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
@@ -824,12 +824,16 @@ def _create_windows(
     )
 
 
-def train_eval_split(df, seed):
+def train_eval_split(df):
+    # fix the seed to always get identical splits
+    seed = 20220429
     train, eval_ = train_test_split(df, test_size=1/10, random_state=seed)
     return sorted(train.index.to_list()), sorted(eval_.index.to_list())
 
 
-def train_valid_split(df, valid_set_i, seed, shuffle):
+def train_valid_split(df, valid_set_i, shuffle):
+    # fix the seed to always get identical splits
+    seed = 20220429
     train, valid1 = train_test_split(df, test_size=1/5, random_state=seed, shuffle=shuffle)
     train, valid2 = train_test_split(train, test_size=1/4, random_state=seed, shuffle=shuffle)
     train, valid3 = train_test_split(train, test_size=1/3, random_state=seed, shuffle=shuffle)
@@ -1116,7 +1120,7 @@ def acc(
     y_true,
     y_pred,
 ):
-    return balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
+    return balanced_accuracy_score(y_true=y_true.astype(int), y_pred=y_pred.astype(int))
 
 
 def window_acc(
@@ -1982,10 +1986,10 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
     patches = []
     if not df_np.empty:
         mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
-        patches.append(mpatches.Patch(color='b', label=f'False\n({mae_non_patho:.2f} years mae)', alpha=.5))
+        patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years mae)', alpha=.5))
     if not df_p.empty:
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
-        patches.append(mpatches.Patch(color='r', label=f'True\n({mae_patho:.2f} years mae)', alpha=.5))
+        patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
     ax7.legend(handles=patches, title='Pathological')
 
     bins = np.arange(0, 100, 5)
