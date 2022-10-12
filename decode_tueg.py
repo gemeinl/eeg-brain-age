@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 if os.path.exists('/work/braindecode'):
     sys.path.insert(0, '/work/braindecode')
@@ -495,6 +496,33 @@ def subsample_uniformly(d):
     return d_uniform
 
 
+def add_ages_from_additional_sources(ds):
+    for d_ in ds.datasets:
+        # manually add back missing reports here! -.-
+        d_.description['report'] = TUHAbnormal._read_physician_report(
+            d_.description.path.replace('TUH_PRE', 'TUH').replace('.edf', '.txt'),
+        )
+        rec_year = d_.raw.info['meas_date'].year
+        # seems like a header broke in preprocessing. read header of original unpreprocessed reocrding
+        header = TUHAbnormal._read_edf_header(d_.description.path.replace('TUH_PRE', 'TUH'))
+        pattern = r'\d\d-\w\w\w-(\d\d\d\d)'
+        matches = re.findall(pattern, str(header))
+        if len(matches) != 1:
+            birthyear = np.nan
+        else:
+            birthyear = int(matches[0])
+        d_.description['date_age'] = int(rec_year) - birthyear
+        pattern = r'(\d+)[ -]+?[years]{3,5}[ -]+?[old]{3}'
+        matches = re.findall(pattern, d_.description.report)
+        if len(matches) >= 1:
+            # assume report always starts with 'XX year old ...'
+            match = int(matches[0])
+        elif len(matches) == 0:
+            match = np.nan
+        d_.description['report_age'] = match
+    return ds
+
+
 def get_datasets(
     data_path,
     target_name,
@@ -517,6 +545,22 @@ def get_datasets(
         n_jobs=n_jobs,
         target_name = 'age' if target_name in ['age', 'age_clf'] else target_name,
     )
+    
+    exclude_derivating_ages = 1
+    if exclude_derivating_ages != -1:
+        logger.info(f'rejecting recordings with > 1 year derivation in header, dates, and report')
+        d = tuabn_train.description
+        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings in total')
+        # add ages parsed from medical report and computed from recording export date and birth year of patient
+        tuabn_train = add_ages_from_additional_sources(tuabn_train)
+        # if the difference is bigger than one year, possible due to anonymization, reject the recording
+        c1 = (tuabn_train.description.age - tuabn_train.description.report_age).abs() < 2
+        c2 = (tuabn_train.description.age - tuabn_train.description.date_age).abs() < 2
+        c3 = (tuabn_train.description.date_age - tuabn_train.description.report_age).abs() < 2
+        ids = tuabn_train.description[c1 & c2 & c3].index.to_list()
+        tuabn_train = tuabn_train.split([ids])['0']
+        d = tuabn_train.description
+        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
     
     subsample = -1
     if subsample != -1:
