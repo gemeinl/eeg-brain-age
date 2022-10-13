@@ -65,9 +65,7 @@ def _decode_tueg(params):
 
 
 # TODO: replace color codes in the output log txt file?
-# TODO: physician reports are missing in TUH_PRE. add back
 # TODO: look at the (negative) outliers reports. why are they outliers?
-# TODO: try under-/oversampling to cope with the target distribution?
 def decode_tueg(
     batch_size,
     config,
@@ -503,7 +501,7 @@ def add_ages_from_additional_sources(ds):
             d_.description.path.replace('TUH_PRE', 'TUH').replace('.edf', '.txt'),
         )
         rec_year = d_.raw.info['meas_date'].year
-        # seems like a header broke in preprocessing. read header of original unpreprocessed reocrding
+        # seems like one (?) header broke in preprocessing. read header of original unpreprocessed reocrding
         header = TUHAbnormal._read_edf_header(d_.description.path.replace('TUH_PRE', 'TUH'))
         pattern = r'\d\d-\w\w\w-(\d\d\d\d)'
         matches = re.findall(pattern, str(header))
@@ -2173,7 +2171,7 @@ def age_gap_diff_permutations(df, n_repetitions, subject_wise):
     return mean_gap_diff, mean_gap_diffs
 
 
-def plot_violin(y, sampled_y, xlabel, center_value=0):
+def plot_violin(y, sampled_y, p, xlabel, center_value=0):
     fig, ax = plt.subplots(1, 1, figsize=(12, 3))
     ax.axvline(y, c='lightgreen')
     ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
@@ -2187,7 +2185,8 @@ def plot_violin(y, sampled_y, xlabel, center_value=0):
     ax.legend(['Observed', 'Sampled'])#, title='Mean Chronological Age - Predicted Age')
     max_abs_lim = max([abs(center_value - i) for i in ax.get_xlim()])
     ax.set_xlim(center_value-max_abs_lim, center_value+max_abs_lim)
-    ax.text(y, ax.get_ylim()[1], f'{y:.2f}',
+    
+    ax.text(y, ax.get_ylim()[1], f'{y:.2f} (p={p:.2E})',
             ha='center', va='bottom', fontweight='bold')
     return ax
 
