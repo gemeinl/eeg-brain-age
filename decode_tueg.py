@@ -32,8 +32,9 @@ from sklearn.metrics import mean_absolute_error, balanced_accuracy_score, mean_a
 from sklearn.model_selection import train_test_split
 from sklearn.compose import TransformedTargetRegressor
 from skorch.helper import predefined_split
-from skorch.callbacks import LRScheduler, Checkpoint, TrainEndCheckpoint, ProgressBar
+from skorch.callbacks import LRScheduler, Checkpoint, TrainEndCheckpoint, ProgressBar, BatchScoring
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from skorch.utils import valid_loss_score, noop
 
 from braindecode.datasets.tuh import TUHAbnormal
 from braindecode.preprocessing import Preprocessor, preprocess
@@ -126,7 +127,7 @@ def decode_tueg(
     )
 
     #log_capture_string = get_log_capturer(logger, debug)
-    level = logging.DEBUG if debug else logging.INFO
+    level = logging.DEBUG if debug == 1 else logging.INFO
     logger.setLevel(level)
     logger.info(f'\n{config.sort_index()}')
 
@@ -1209,13 +1210,19 @@ def get_callbacks(
     test_name,
     out_dir,
 ):
+    callbacks = []
+    if test_name == 'eval':
+        callbacks.extend([
+            (f"{test_name}_loss", BatchScoring(
+                valid_loss_score, name=f"{test_name}_loss", target_extractor=noop)),
+        ])
     # add callbacks for cosine annealing with warm restarts and a checkpointer
     n_epochs_per_restart = int(n_epochs/(n_restarts+1))
-    callbacks = [
+    callbacks.extend([
         ("lr_scheduler", LRScheduler(
             CosineAnnealingWarmRestarts, T_0=n_epochs_per_restart, T_mult=1)),
         # ("progress_bar", ProgressBar()),  # unfortunately not working in jupyter?
-    ]
+    ])
     # compute the mean and std on train ages
     # scale both train and valid set ages accordingly
     # set up scoring functions that invert the scaling for both
@@ -1256,6 +1263,7 @@ def get_callbacks(
     if intuitive_training_scores and fast_mode == 0:
         monitor = f'{test_name}_age_mae_best' if target_name == 'age' else f'{test_name}_misclass_best'
     else:
+        # TODO: eval_loss_best not found as name for default callback is 'valid_loss'
         monitor = f'{test_name}_loss_best'
     callbacks.extend([
         (f"best_{test_name}", Checkpoint(
@@ -1655,7 +1663,7 @@ def load_exp(
     return clf, data_scaler, target_scaler, config
 
 
-def plot_learning_curves(histories, loss_name, ax=None):
+def plot_learning_curves(histories, loss_name, valid_or_eval='Valid', ax=None):
     if ax is None:
         fig, ax = plt.subplots(1,1,figsize=(12,3))
     for history in histories:
@@ -1667,7 +1675,7 @@ def plot_learning_curves(histories, loss_name, ax=None):
                  label=f'Train ({mean_train_loss[-1]:.5f})')
     mean_valid_loss = np.mean([history['valid_loss'] for history in histories], axis=0)
     sns.lineplot(x=history['epoch'], y=mean_valid_loss, linestyle='--', c='orange', 
-                 label=f'Valid ({mean_valid_loss[-1]:.5f})')
+                 label=f'{valid_or_eval} ({mean_valid_loss[-1]:.5f})')
     ax.set_ylabel(loss_name)
     ax.set_xlabel('Epoch')
     ax.legend(title='Subset')
@@ -1750,10 +1758,10 @@ def plot_learning(
     return ax
 
 
+# TODO: accept a thresh as input (valid thresh for eval preds)
 def plot_thresh_to_acc(
     df,
     ax=None,
-    dummy=None,
 ):
     # if we only decode normals or abnormals, this will raise 
     #if df.pathological.nunique() == 1:
@@ -1774,15 +1782,13 @@ def plot_thresh_to_acc(
     gap_df['acc'] *= 100
 
     if ax is None:
-        fig, ax1 = plt.subplots(1,1,figsize=(12,3))
+        fig, ax = plt.subplots(1,1,figsize=(12,3))
 
     # combine age gap hist with thresh to acc curve by creating a twin axis
-    ax1 = plot_age_gap_hist(df, bin_width=1, ax=ax1)
+    ax = plot_age_gap_hist(df, bin_width=1, ax=ax)
+    ax.legend(title='Pathological', loc='upper left')
     # ax is thresh curve, ax1 is histogram
-    ax = ax1.twinx()
-    # https://stackoverflow.com/questions/26752464/how-do-i-align-gridlines-for-two-y-axis-scales-using-matplotlib
-    ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
-    ax1.legend(title='Pathological', loc='upper left')
+    ax1 = ax.twinx()
 
     df = gap_df
     if 0 not in df.pathological.unique():
@@ -1792,55 +1798,57 @@ def plot_thresh_to_acc(
     else:
         c='k'
 
-    ax.plot(df['thresh'], df['acc'], c='lightgreen', label='Thresholds')#, zorder=3)  # does not make sense in mixed case
+    ax1.plot(df['thresh'], df['acc'], c='lightgreen', label='Thresholds')#, zorder=3)  # does not make sense in mixed case
 
-    ax.set_ylabel('Accuracy [%]')
+    ax1.set_ylabel('Accuracy [%]')
     ax.set_xlabel('Chronological Age − Decoded Age [years]')
 #     ax.legend(title='Pathological', loc='lower left')
 
     xlim = max(abs(sorted_gaps)) * 1.1
-    ax.set_xlim(-xlim, xlim)
+    ax1.set_xlim(-xlim, xlim)
 
-    ax.scatter(
+    ax1.scatter(
         sorted_gaps[(df.acc - 50).abs().argmax()], 
         df.acc[(df.acc - 50).abs().argmax()], 
         zorder=4, marker='*',  c='orange', s=50,
 #         label=f'Best ({sorted_gaps[df.acc.argmax()]:.2f} years, {df.acc.max():.2f} %)'
         label=f'Best ({sorted_gaps[(df.acc - 50).abs().argmax()]:.2f} , {df.acc[(df.acc - 50).abs().argmax()]:.2f})'
     )
-    ax.legend(loc='upper right')
+    ax1.legend(loc='upper right')
     
 #     # color the background
 #     ax1.set_facecolor('white')
 #     ax.set_facecolor('white')
-    ylim = ax.get_ylim()
-    ax.axhspan(
-        float(ax.get_yticks()[0]), float(ax.get_yticks()[-1]), xmax=1, 
+    ylim = ax1.get_ylim()
+    ax1.axhspan(
+        float(ax1.get_yticks()[0]), float(ax1.get_yticks()[-1]), xmax=1, 
         xmin=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
         facecolor='teal', alpha=.1, zorder=-100,
     )
-    ax.axhspan(
-        float(ax.get_yticks()[0]), float(ax.get_yticks()[-1]), xmin=0, 
+    ax1.axhspan(
+        float(ax1.get_yticks()[0]), float(ax1.get_yticks()[-1]), xmin=0, 
         xmax=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
         facecolor='orange', alpha=.1, zorder=-100,
     )
-    ax.set_ylim(ylim)
+    ax1.set_ylim(ylim)
     
-    x1 = ax.get_xlim()[0] / 2
-    x2 = ax.get_xlim()[1] / 2
-    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/2
-    ax.text(x1, y, "Predicted Pathological", ha='right')
-    ax.text(x2, y, "Predicted Non-Pathological", ha='left')
+    # in the center of left and right half, add text what it means
+    x1 = ax1.get_xlim()[0] / 2
+    x2 = ax1.get_xlim()[1] / 2
+    y = ax1.get_ylim()[0] + np.diff(ax1.get_ylim())/2
+    ax1.text(x1, y, "Predict Pathological", ha='right')
+    ax1.text(x2, y, "Predict Non-Pathological", ha='left')
     
     ax.set_title('Brain Age Gap Pathology Proxy')
     ax1.set_title('')
     
-#     ax1.grid(None)
-#     ax.xaxis.grid(True)
-#     ax.yaxis.grid(True)
-    
-    if dummy is not None:
-        ax.axhline(dummy, c='m', linewidth=1)
+    # manually force last ytick to show (as multiple of 10). 78.75 did not create a 80 ticklabel, s.t.
+    # labels in twin axis did not match
+    ax.set_ylim((ax.get_ylim()[0], int(math.ceil(ax.get_ylim()[1] / 10.0)) * 10))
+    # https://stackoverflow.com/questions/26752464/how-do-i-align-gridlines-for-two-y-axis-scales-using-matplotlib
+    # order matters. do this after data was plotted to this axis
+    ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
+    ax1.grid(None)
     return ax
 
 
@@ -1960,32 +1968,42 @@ def create_grid(hist_max_count, max_age):
     return fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7
 
 
-def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax=None, ax=None):
-    # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
+def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
     from matplotlib.colors import LinearSegmentedColormap
-    cmap_ = LinearSegmentedColormap.from_list('', ['white', *getattr(plt.cm, cmap)(np.arange(255))])
-    
+    # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
+#     cmap_ = LinearSegmentedColormap.from_list('', ['white', *getattr(plt.cm, cmap)(np.arange(255))])
+    # make discrete colorbar
+    colors = ['white'] + [getattr(plt.cm, cmap)(i) for i in np.linspace(0, 255, vmax-1, dtype=int)]
+    cmap_ = LinearSegmentedColormap.from_list('discrete_reds', colors, N=vmax)
+
     if ax is None:
         fig, ax = plt.subplots(1,1,figsize=(7,6))
 
     ax = sns.heatmap(H, ax=ax, cmap=cmap_, vmin=0, vmax=vmax,
                      cbar_ax=cbar_ax, cbar_kws={'aspect': 50, 'fraction': 0.05})
     ax.invert_yaxis()
-    
+
     # add cbar max as text
-    cbar_ax.set_yticks(list(cbar_ax.get_yticks())[:-1] + [cbar_ax.get_ylim()[1]])
+#     print([t.text for t in cbar_ax.get_yticklabels()])
+#     cbar_ax.set_yticks(list(cbar_ax.get_yticks())[:-1] + [cbar_ax.get_ylim()[1]])
+    # avoid floating point number labels in discrete colorbar
+    cbar_ax.set_yticks(cbar_ax.get_yticks()[:-1])
+    cbar_ax.set_yticklabels([
+        '' if '.' in t._text and t._text.split('.')[1] != '0' else str(int(float(t._text)))
+        for t in cbar_ax.get_yticklabels()
+    ])
     cbar_ax.set_ylabel('Count')
-    
+
     ax.scatter(
         df.y_true.mean()/bin_size, df.y_pred.mean()/bin_size, 
         marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
         s=250, edgecolor='k', zorder=3)
-    
+
     # TODO: double and triple check why y_true and y_pred x and y here need to be swapped
     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
     ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, #linestyle='--',
             c='magenta' if cmap == 'Reds' else 'cyan')
-    
+
     # add error to trendline
     # does not really make sense
 #     mae = mean_absolute_error(df.y_true, df.y_pred)
@@ -2022,8 +2040,8 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
     assert max_age % bin_size == 0
     fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = create_grid(hist_max_count, max_age)
     
-    df_p = df[df.pathological]
-    df_np = df[~df.pathological]
+    df_p = df[df.pathological == 1]
+    df_np = df[df.pathological == 0]
     import matplotlib.patches as mpatches
     patches = []
     if not df_np.empty:
@@ -2034,7 +2052,7 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
     ax7.legend(handles=patches, title='Pathological')
 
-    bins = np.arange(0, 100, 5)
+    bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
     ax0.axvline(df_np.y_true.mean(), c='cyan')
     sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
@@ -2042,13 +2060,12 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
 
     sns.histplot(data=df_np, y='y_pred', ax=ax2, color='b', kde=True, bins=bins)
     sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
-    ax2.axhline(df[~df.pathological].y_pred.mean(), c='cyan')
+    ax2.axhline(df_np.y_pred.mean(), c='cyan')
     ax2.axhline(df_p.y_pred.mean(), c='magenta')
     ax2.set_xticks(ax0.get_yticks()[:-1])
     ax2.set_yticks(np.linspace(0, 100, 11, dtype='int'))
     ax2.legend()
     
-    # TODO: right histogram is one col too wide?
     sns.lineplot(x=[0, 100], y=[0, 100], ax=ax3, c='k', linewidth=1)
     sns.scatterplot(data=df_np[['y_pred', 'y_true']].mean().to_frame().T, 
                     x='y_true', y='y_pred', ax=ax3, c='cyan', marker='*', s=300)
@@ -2068,7 +2085,7 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
             bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
         )
         Hs.append(H)
-    Hmax = max([H.max() for H in Hs if H is not None])
+    Hmax = np.max([H.max() for H in Hs if H is not None]).astype(int)
 
 #     fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
 #     fig.tight_layout()
@@ -2112,8 +2129,8 @@ def plot_age_gap_hist(
         np.arange(0, - df.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
         np.arange(bin_width, df.gap.max() + bin_width, bin_width, dtype=int)
     ])
-    patho_df = df[df.pathological]
-    non_patho_df = df[~df.pathological]
+    patho_df = df[df.pathological == 1]
+    non_patho_df = df[df.pathological == 0]
     ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, label='False')
     ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
     mean_non_patho_gap = non_patho_df.gap.mean()
@@ -2171,7 +2188,7 @@ def age_gap_diff_permutations(df, n_repetitions, subject_wise):
     return mean_gap_diff, mean_gap_diffs
 
 
-def plot_violin(y, sampled_y, p, xlabel, center_value=0):
+def plot_violin(y, sampled_y, xlabel, center_value=0):
     fig, ax = plt.subplots(1, 1, figsize=(12, 3))
     ax.axvline(y, c='lightgreen')
     ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
@@ -2186,6 +2203,13 @@ def plot_violin(y, sampled_y, p, xlabel, center_value=0):
     max_abs_lim = max([abs(center_value - i) for i in ax.get_xlim()])
     ax.set_xlim(center_value-max_abs_lim, center_value+max_abs_lim)
     
+    p = np.min([
+        ((sampled_y >= y).sum() / len(sampled_y)),
+        ((sampled_y <= y).sum() / len(sampled_y)),
+    ])
+    if p == 0:
+        p = 1/len(sampled_y)
+
     ax.text(y, ax.get_ylim()[1], f'{y:.2f} (p={p:.2E})',
             ha='center', va='bottom', fontweight='bold')
     return ax
@@ -2283,8 +2307,6 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     ax1.tick_params(labelsize=fs - 5)
     ax2.tick_params(labelsize=fs - 5)
     ax2.set_xlabel("")
-    # plt.savefig("tuh-abnormal-eeg-corpus-train-age-pyramid.pdf",
-    #             bbox_inches="tight")
     if out_dir is not None:
         plt.savefig(out_dir+"tuh_{}.png".format(train_or_eval),
                     bbox_inches="tight")
@@ -2339,9 +2361,15 @@ def _read_result(
         score_path = os.path.join(exp_dir, 'train_end_scores.csv')
         this_result = pd.read_csv(score_path, index_col=0)
     elif result == 'preds':
-        pred_path = os.path.join(exp_dir, 'preds', 'train_end_valid_preds.csv')
-        preds1 = pd.read_csv(pred_path, index_col=0)
-        preds1['subset'] = 'valid'
+        try:
+            subset = 'valid'
+            pred_path = os.path.join(exp_dir, 'preds', f'train_end_{subset}_preds.csv')
+            preds1 = pd.read_csv(pred_path, index_col=0)
+        except:
+            subset = 'eval'
+            pred_path = os.path.join(exp_dir, 'preds', f'train_end_{subset}_preds.csv')
+            preds1 = pd.read_csv(pred_path, index_col=0)
+        preds1['subset'] = subset
         try:
             pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_not_{config.squeeze()["subset"]}_preds.csv')
             preds2 = pd.read_csv(pred_path, index_col=0)
@@ -2363,6 +2391,72 @@ def _read_result(
         this_result['seed'] = int(config['seed'])
         this_result['valid_set_i'] = int(config['valid_set_i'])
     return this_result
+
+
+def plot_recording_interval_hist(df, clip_value, c, ax=None):
+    all_day_diffs = []
+    for subj, g in df.groupby('subject'):
+        diff = g[['year', 'month', 'day']].sort_values(['year', 'month', 'day']).diff()
+        day_diff = diff['year'] * 365 + diff['month'] * 30 + diff['day']
+        day_diff = day_diff.iloc[1:]
+        assert np.isfinite(day_diff).all()
+        all_day_diffs.append(day_diff)
+    day_diffs = pd.DataFrame(pd.concat(all_day_diffs, axis=0)).astype(int)
+
+    bin_width = 30
+    bins = np.arange(0, 4748, bin_width)
+    if ax is None:
+        fig, ax = plt.subplots(1,1,figsize=(12,3))
+    ax.axvline(day_diffs.mean().squeeze(), c=c, label='')
+    day_diffs[day_diffs>clip_value] = clip_value
+    ax = sns.histplot(day_diffs, ax=ax, bins=bins, kde=True, palette=[c])
+    ax.set_yscale('log')
+    ax.set_xticks([0, 30, 90, 180, 365] + [365*i for i in range(2, 14)]);
+    ax.set_xticklabels([str(i) for i in [0, 30, 90, 180, 365]] + [f'365*{i}' for i in range(2, 14)])
+    ax.set_xlim((0-bin_width, clip_value+bin_width))
+    ax.set_xlabel('Days')
+    print(df.pathological.unique(), day_diffs.mean().squeeze(), day_diffs.std().squeeze())
+    return ax, day_diffs.mean().squeeze(), day_diffs.std().squeeze()
+
+
+def extract_longitudinal_dataset(description, kind, load):
+    assert kind in ['transition', 'pathological', 'non_pathological']
+    dfs = []
+    for s, g in description.groupby('subject'):
+        if len(g) > 1:
+            if g.pathological.nunique() == 2:
+                if kind == 'transition':
+                        dfs.append(g)
+            else:
+                if kind == 'pathological':
+                    if g.pathological.unique() == 1:
+                        dfs.append(g)
+                elif kind == 'non_pathological':
+                    if g.pathological.unique() == 0:
+                        dfs.append(g)
+    dfs = pd.concat(dfs)
+    dfs = dfs.reset_index(drop=True)
+    if kind == 'transition':
+        assert all(dfs.groupby('subject').pathological.nunique() == 2)
+    else:
+        if kind in ['pathological', 'non_pathological']:
+            assert all(dfs.groupby('subject').pathological.nunique() == 1)
+    print("n recs", len(dfs), "n subj", dfs.subject.nunique())
+    if not load:
+        return dfs
+    else:
+        dfs = dfs.T
+        ds = []
+        for i, s in dfs.iteritems():
+            p = s.path
+            p = p.replace('/data/datasets/TUH/EEG/tuh_eeg/', '/home/jovyan/mne_data/TUH_PRE/tuh_eeg/')
+            if not os.path.exists(p):
+                raise RuntimeError("rec not found")
+            raw = mne.io.read_raw_edf(p, preload=False, verbose='error')
+            d = BaseDataset(raw, s, target_name='age')
+            ds.append(d)
+        ds = BaseConcatDataset(ds)
+        return ds
 
 
 if __name__ == "__main__":
