@@ -600,7 +600,6 @@ def get_competition_datasets(
     # meta['subject'] = meta['id']
     # tuabn_train.set_description(meta)
     
-    # TODO: implement splitting if both conditions should be used
     if condition in ['EC', 'EO']:
         logger.debug(f'using condition {condition} data only')
         tuabn_train = tuabn_train.split('condition')[condition]
