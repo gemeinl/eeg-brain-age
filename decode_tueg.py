@@ -426,7 +426,7 @@ def check_input_args(
         assert isinstance(max_age, int)
     if min_age != -1:
         assert isinstance(min_age, int)
-    if condition not in ['EC', 'EO']:
+    if condition not in ['EC', 'EO', 'all']:
         raise ValueError
 
 
@@ -483,6 +483,7 @@ def get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
     tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name)
     return _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+
 
 def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
@@ -573,6 +574,14 @@ def get_competition_datasets(
     with open(os.path.join(data_path, 'train.pkl'), 'rb') as f:
         tuabn_train = pickle.load(f)
 
+    # order dataset from all EC, then all EO to
+    # EC, EO of subject 1 to EC, EO of last subjects
+    # to easily redruce subject leakage in splitting
+    splits = tuabn_train.split('subject')
+    tuabn_train = BaseConcatDataset([d for s, d in splits.items()])
+    if not tuabn_train.description['condition'][0] != tuabn_train.description['condition'][1]:
+        raise RuntimeError
+
     # train_raws = {}
     # for condition in ["EC", "EO"]:
     #     train_raws[condition] = []
@@ -599,7 +608,6 @@ def get_competition_datasets(
         with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
             tuabn_valid = pickle.load(f)
     else:
-        logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
         tuabn_train, tuabn_valid = _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
     if n_train_recordings != -1:
         tuabn_train = tuabn_train.split([list(range(n_train_recordings))])['0']
