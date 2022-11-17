@@ -482,14 +482,14 @@ def get_train_eval_datasets(tuabn_train, target_name):
 def get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
     tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name)
-    return _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+    shuffle = True if target_name in ['age', 'age_clf'] else False
+    return _get_train_valid_datasets(tuabn_train, target_name, valid_set_i, shuffle)
 
 
-def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
+def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i, shuffle):
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
     logger.debug(f"into train (.8) and valid (.2).")
     # for pathology decoding, turn off shuffling and make time series split chronologically
-    shuffle = True if target_name in ['age', 'age_clf'] else False
     train_ids, valid_ids = train_valid_split(tuabn_train.description, valid_set_i, shuffle)
     intersection = np.intersect1d(train_ids, valid_ids)
     if intersection.any():
@@ -608,7 +608,8 @@ def get_competition_datasets(
         with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
             tuabn_valid = pickle.load(f)
     else:
-        tuabn_train, tuabn_valid = _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+        tuabn_train, tuabn_valid = _get_train_valid_datasets(
+            tuabn_train, target_name, valid_set_i, False)
     if n_train_recordings != -1:
         tuabn_train = tuabn_train.split([list(range(n_train_recordings))])['0']
     if tmin != -1 or tmax != -1:
