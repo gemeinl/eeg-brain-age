@@ -585,7 +585,7 @@ def get_competition_datasets(
     # meta['subject'] = meta['id']
     # tuabn_train.set_description(meta)
     
-    condition = ''
+    condition = 'EC'
     if condition in ['EC', 'EO']:
         tuabn_train = tuabn_train.split('condition')[condition]
     if final_eval == 1:
