@@ -604,8 +604,10 @@ def get_competition_datasets(
         logger.debug(f'using condition {condition} data only')
         tuabn_train = tuabn_train.split('condition')[condition]
     if final_eval == 1:
-        with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
-            tuabn_valid = pickle.load(f)
+        # with open(os.path.join(data_path.replace('training', 'testing'), f'test_{sfreq}_hz.pkl'), 'rb') as f:
+        #     tuabn_valid = pickle.load(f)
+        # fake valid set, since we don't have labels for test set and cannot track performance during training
+        tuabn_valid = tuabn_train.split([0])['0']
     else:
         tuabn_train, tuabn_valid = _get_train_valid_datasets(
             tuabn_train, target_name, valid_set_i, False)
