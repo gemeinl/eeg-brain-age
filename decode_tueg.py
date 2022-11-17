@@ -590,7 +590,7 @@ def get_competition_datasets(
         tuabn_train = tuabn_train.split('condition')[condition]
     if final_eval == 1:
         with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
-            tuabn_train = pickle.load(f)
+            tuabn_valid = pickle.load(f)
     else:
         logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
         tuabn_train, tuabn_valid = _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
