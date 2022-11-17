@@ -70,6 +70,7 @@ def _decode_tueg(params):
 # TODO: look at the (negative) outliers reports. why are they outliers?
 def decode_tueg(
     batch_size,
+    condition,
     config,
     data_path,
     date,
@@ -120,7 +121,7 @@ def decode_tueg(
     #warnings.filterwarnings("ignore", message="UserWarning: y_pred contains classes not in y_true")
 
     check_input_args(
-        batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
+        batch_size, condition, config, data_path, debug, final_eval, intuitive_training_scores,
         max_age, min_age, model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, 
         out_dir, preload, seed, shuffle_data_before_split, squash_outs, 
         standardize_data, standardize_targets, subset, target_name, tmax, tmin, 
@@ -156,6 +157,7 @@ def decode_tueg(
             seed,
             min_age,
             max_age,
+            condition,
         )
     else:
         tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
@@ -348,6 +350,7 @@ def add_file_logger(
 
 def check_input_args(
     batch_size, 
+    condition,
     config,
     data_path,
     debug,
@@ -423,6 +426,8 @@ def check_input_args(
         assert isinstance(max_age, int)
     if min_age != -1:
         assert isinstance(min_age, int)
+    if condition not in ['EC', 'EO']:
+        raise ValueError
 
 
 def test_name(final_eval):
@@ -560,6 +565,7 @@ def get_competition_datasets(
     seed,
     min_age,
     max_age,
+    condition,
 ):
     train_subj = 1200  # use 10 instead of 1200 training subjects, for demonstration purpose
     test_subj = 400  # use 10 instead of 400 testing subjects, for demonstration purpose
@@ -585,8 +591,9 @@ def get_competition_datasets(
     # meta['subject'] = meta['id']
     # tuabn_train.set_description(meta)
     
-    condition = 'EC'
+    # TODO: implement splitting if both conditions should be used
     if condition in ['EC', 'EO']:
+        logger.debug(f'using condition {condition} data only')
         tuabn_train = tuabn_train.split('condition')[condition]
     if final_eval == 1:
         with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
@@ -2576,6 +2583,7 @@ if __name__ == "__main__":
     # args for decoding
     parser.add_argument('--augment', type=str)
     parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--condition', type=str)
     parser.add_argument('--data-path', type=str)
     parser.add_argument('--date', type=str)
     parser.add_argument('--debug', type=int)
