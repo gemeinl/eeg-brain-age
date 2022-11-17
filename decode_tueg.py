@@ -36,6 +36,7 @@ from skorch.callbacks import LRScheduler, Checkpoint, TrainEndCheckpoint, Progre
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from skorch.utils import valid_loss_score, noop
 
+from braindecode.datasets import BaseDataset, BaseConcatDataset
 from braindecode.datasets.tuh import TUHAbnormal
 from braindecode.preprocessing import Preprocessor, preprocess
 from braindecode.preprocessing.windowers import create_fixed_length_windows
@@ -140,20 +141,37 @@ def decode_tueg(
     cropped = True
     logger.debug(f"cropped: {cropped}")
 
-    tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
-        data_path, 
-        target_name,
-        subset,
-        n_train_recordings,
-        tmin,
-        tmax,
-        n_jobs, 
-        final_eval,
-        valid_set_i,
-        seed,
-        min_age,
-        max_age,
-    )
+    competition = 1
+    if competition == 1:
+        tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name = get_competition_datasets(
+            data_path,
+            target_name,
+            subset,
+            n_train_recordings,
+            tmin,
+            tmax,
+            n_jobs,
+            final_eval,
+            valid_set_i,
+            seed,
+            min_age,
+            max_age,
+        )
+    else:
+        tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
+            data_path, 
+            target_name,
+            subset,
+            n_train_recordings,
+            tmin,
+            tmax,
+            n_jobs, 
+            final_eval,
+            valid_set_i,
+            seed,
+            min_age,
+            max_age,
+        )
     title = create_title(
         final_eval,
         len(tuabn_train.datasets),
@@ -243,6 +261,7 @@ def decode_tueg(
         sfreq,
         len(tuabn_train),
         batch_size,
+        competition,
     )
     logger.info(title)
     logger.info(f'starting training')
@@ -273,6 +292,9 @@ def decode_tueg(
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
     
+    if competition == 1:
+        return
+
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
     # predict valid rest and longitudinal datasets
@@ -455,6 +477,9 @@ def get_train_eval_datasets(tuabn_train, target_name):
 def get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
     tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name)
+    return _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+
+def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
     logger.debug(f"into train (.8) and valid (.2).")
     # for pathology decoding, turn off shuffling and make time series split chronologically
@@ -521,6 +546,63 @@ def add_ages_from_additional_sources(ds):
         d_.description['report_age'] = match
     return ds
 
+
+def get_competition_datasets(
+    data_path,
+    target_name,
+    subset,
+    n_train_recordings,
+    tmin,
+    tmax,
+    n_jobs,
+    final_eval,
+    valid_set_i,
+    seed,
+    min_age,
+    max_age,
+):
+    train_subj = 1200  # use 10 instead of 1200 training subjects, for demonstration purpose
+    test_subj = 400  # use 10 instead of 400 testing subjects, for demonstration purpose
+    sfreq = 100
+    with open(os.path.join(data_path, 'train.pkl'), 'rb') as f:
+        tuabn_train = pickle.load(f)
+
+    # train_raws = {}
+    # for condition in ["EC", "EO"]:
+    #     train_raws[condition] = []
+    #     train_subjs = list(range(1, train_subj + 1))
+    #     for s in train_subjs:
+    #         fname = os.path.join(data_path, f"subj{s:04}_{condition}{sfreq}_hz_raw.fif.gz")
+    #         raw = mne.io.read_raw(fname, preload=False, verbose='error')
+    #         train_raws[condition].append(raw)
+    # meta = pd.read_csv(os.path.join(data_path, "train_subjects.csv"), index_col=0)
+    # meta = pd.concat([meta, meta])
+    # meta['condition'] = len(train_raws['EC']) * ['EC'] + len(train_raws['EO']) * ['EO']
+    # train_raws = train_raws['EC'] + train_raws['EO']
+    # tuabn_train = BaseConcatDataset([
+    #     BaseDataset(raw, target_name=target_name) for raw in train_raws
+    # ])
+    # meta['subject'] = meta['id']
+    # tuabn_train.set_description(meta)
+    
+    condition = ''
+    if condition in ['EC', 'EO']:
+        tuabn_train = tuabn_train.split('condition')[condition]
+    if final_eval == 1:
+        with open(os.path.join(data_path.replace('training', 'testing'), 'test.pkl'), 'rb') as f:
+            tuabn_train = pickle.load(f)
+    else:
+        logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+        tuabn_train, tuabn_valid = _get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+    if n_train_recordings != -1:
+        tuabn_train = tuabn_train.split([list(range(n_train_recordings))])['0']
+    if tmin != -1 or tmax != -1:
+        preprocessors = get_preprocessors(tmin, tmax)
+        [tuabn_train, tuabn_valid] = [
+            preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
+        ]
+    return tuabn_train, tuabn_valid, None, None, None
+    
 
 def get_datasets(
     data_path,
@@ -612,13 +694,14 @@ def get_datasets(
 
     some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
     logger.debug(f'some raw durations {some_durations}')
-    logger.debug("preprocessing")
-    preprocessors = get_preprocessors(tmin, tmax)
-    [tuabn_train, tuabn_valid] = [
-        preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
-    ]
-    some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
-    logger.debug(f"some preprocessed durations {some_durations}")
+    if tmin != -1 or tmax != -1:
+        logger.debug("preprocessing")
+        preprocessors = get_preprocessors(tmin, tmax)
+        [tuabn_train, tuabn_valid] = [
+            preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
+        ]
+        some_durations = [ds.raw.n_times/ds.raw.info['sfreq'] for ds in tuabn_train.datasets][:3]
+        logger.debug(f"some preprocessed durations {some_durations}")
     logger.debug(f'train datasets {len(tuabn_train.datasets)}')
     logger.debug(f'{test_name(final_eval)} datasets {len(tuabn_valid.datasets)}')
 
@@ -1149,7 +1232,7 @@ def age_mae(
     # TODO: derive target_scaler from X?
     y_true = target_scaler.invert(y_true)
     y_pred = target_scaler.invert(y_pred)
-    return mae(y_true, y_pred, return_y_yhat)
+    return mae(y_true, y_pred)
 
 
 def mae(
@@ -1231,11 +1314,11 @@ def get_callbacks(
         if intuitive_training_scores and fast_mode == 0:
             callbacks.extend([
                 (f"MAE_{test_name}", CroppedTrialEpochScoring(
-                    partial(trial_age_mae, target_scaler=target_scaler),
+                    partial(trial_age_mae, target_scaler=target_scaler, return_y_yhat=False),
                     name=f'{test_name}_age_mae', on_train=False, 
                     lower_is_better=True)),#, avg_axis=2)),
                 ("MAE_train", CroppedTrialEpochScoring(
-                    partial(trial_age_mae, target_scaler=target_scaler),
+                    partial(trial_age_mae, target_scaler=target_scaler, return_y_yhat=False),
                     name='train_age_mae', on_train=True, 
                     lower_is_better=True)),#, avg_axis=2)),
                 ])
@@ -1426,6 +1509,7 @@ def set_augmentation(
     sfreq,
     n_examples,
     batch_size,
+    competition,
 ):
     # TODO: make augment a list of transformations
     if augment == '0':
@@ -1433,8 +1517,6 @@ def set_augmentation(
     probability = 1
     augmentations = {
         'dropout': ChannelsDropout(probability=probability, p_drop=.2, random_state=seed),
-        'flipfb': ChannelsSymmetryFB(probability=probability, ordered_ch_names=ch_names, random_state=seed),
-        'fliplr': ChannelsSymmetry(probability=probability, ordered_ch_names=ch_names, random_state=seed),
         'mask': SmoothTimeMask(probability=probability, mask_len_samples=int(sfreq), random_state=seed),
         'noise': GaussianNoise(probability=probability, std=.1, random_state=seed),
         'reverse': TimeReverse(probability=probability, random_state=seed),
@@ -1443,6 +1525,12 @@ def set_augmentation(
         'identity': IdentityTransform(),
         'identity': IdentityTransform(),
     }
+    if competition != 1:
+        augmentations.update({
+            'flipfb': ChannelsSymmetryFB(probability=probability, ordered_ch_names=ch_names, random_state=seed),
+            'fliplr': ChannelsSymmetry(probability=probability, ordered_ch_names=ch_names, random_state=seed),
+        })
+
     """More options:
         FTSurrogate,
         BandstopFilter,
@@ -2393,6 +2481,7 @@ def _read_result(
     return this_result
 
 
+# TODO: add std error bar around mean?
 def plot_recording_interval_hist(df, clip_value, c, ax=None):
     all_day_diffs = []
     for subj, g in df.groupby('subject'):
@@ -2407,7 +2496,9 @@ def plot_recording_interval_hist(df, clip_value, c, ax=None):
     bins = np.arange(0, 4748, bin_width)
     if ax is None:
         fig, ax = plt.subplots(1,1,figsize=(12,3))
-    ax.axvline(day_diffs.mean().squeeze(), c=c, label='')
+    mean = day_diffs.mean().squeeze()
+    std = day_diffs.std().squeeze()
+    ax.axvline(mean, c=c, label='')
     day_diffs[day_diffs>clip_value] = clip_value
     ax = sns.histplot(day_diffs, ax=ax, bins=bins, kde=True, palette=[c])
     ax.set_yscale('log')
@@ -2415,8 +2506,28 @@ def plot_recording_interval_hist(df, clip_value, c, ax=None):
     ax.set_xticklabels([str(i) for i in [0, 30, 90, 180, 365]] + [f'365*{i}' for i in range(2, 14)])
     ax.set_xlim((0-bin_width, clip_value+bin_width))
     ax.set_xlabel('Days')
-    print(df.pathological.unique(), day_diffs.mean().squeeze(), day_diffs.std().squeeze())
-    return ax, day_diffs.mean().squeeze(), day_diffs.std().squeeze()
+    print(df.pathological.unique(), mean, std)
+    return ax, mean, std
+
+
+def plot_longitudinal_interval_hists(description):
+    fig, ax = plt.subplots(1,1,figsize=(12,3))
+    df_pathological = extract_longitudinal_dataset(description, kind='pathological', load=False)
+    ax, mean_patho, std_patho = plot_recording_interval_hist(df_pathological, 365*5, ax=ax, c='r')
+    df_non_pathological = extract_longitudinal_dataset(description, kind='non_pathological', load=False)
+    ax, mean_non_patho, std_non_patho = plot_recording_interval_hist(df_non_pathological, 365*5, ax=ax, c='b')
+    df_transition = extract_longitudinal_dataset(description, kind='transition', load=False)
+    ax, mean_transition, std_transition = plot_recording_interval_hist(df_transition, 365*5, 'g', ax=ax)
+    ax.legend([
+        f'Pathological ({mean_patho:.0f} $\pm$ {std_patho:.0f} days)',
+        f'Non-Pathological ({mean_non_patho:.0f} $\pm$ {std_non_patho:.0f} days)',
+        f'Transition ({mean_transition:.0f} $\pm$ {std_transition:.0f} days)',
+    ])
+    ax.get_legend().legendHandles[0].set_color('r')
+    ax.get_legend().legendHandles[1].set_color('b')
+    ax.get_legend().legendHandles[2].set_color('g')
+    ax.set_title('Recording Intervals in TUH Longitudinal Datasets')
+    return ax
 
 
 def extract_longitudinal_dataset(description, kind, load):
