@@ -571,7 +571,7 @@ def get_competition_datasets(
     train_subj = 1200  # use 10 instead of 1200 training subjects, for demonstration purpose
     test_subj = 400  # use 10 instead of 400 testing subjects, for demonstration purpose
     sfreq = 100
-    with open(os.path.join(data_path, 'train.pkl'), 'rb') as f:
+    with open(os.path.join(data_path, f'train_{sfreq}_hz.pkl'), 'rb') as f:
         tuabn_train = pickle.load(f)
 
     # order dataset from all EC, then all EO to
@@ -617,6 +617,9 @@ def get_competition_datasets(
         [tuabn_train, tuabn_valid] = [
             preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
         ]
+    [tuabn_train, tuabn_valid] = [
+        preprocess(ds, preprocessors=[Preprocessor('drop_channels', ch_names=['Cz'])], n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
+    ]
     return tuabn_train, tuabn_valid, None, None, None
     
 
@@ -1001,14 +1004,14 @@ def get_avg_ch_mean_n_std(
     # note: mean and std are in microvolts already
     mean_df = pd.concat(
         objs=[
-            pd.read_csv(f.replace('.edf', '_stats.csv'), index_col=0)['mean'] 
+            pd.read_csv(f.replace(f[f.find('.'):], '_stats.csv'), index_col=0)['mean'] 
             for f in tuabn.description['path']
         ], 
         axis=1,
     )
     std_df = pd.concat(
         objs=[
-            pd.read_csv(f.replace('.edf', '_stats.csv'), index_col=0)['std'] 
+            pd.read_csv(f.replace(f[f.find('.'):], '_stats.csv'), index_col=0)['std'] 
             for f in tuabn.description['path']
         ], 
         axis=1,
@@ -1119,7 +1122,8 @@ def standardize(
     data_transform = DataScaler()
     if standardize_data:
         # get avg ch mean and std of train data
-        avg_ch_mean, avg_ch_std = get_avg_ch_mean_n_std(tuabn_train, ch_names=None)
+        avg_ch_mean, avg_ch_std = get_avg_ch_mean_n_std(
+            tuabn_train, ch_names=tuabn_train.datasets[0].windows.ch_names)
         data_transform.avg_ch_mean = avg_ch_mean
         data_transform.avg_ch_std = avg_ch_std
 
