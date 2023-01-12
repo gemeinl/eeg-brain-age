@@ -142,7 +142,7 @@ def decode_tueg(
     cropped = True
     logger.debug(f"cropped: {cropped}")
 
-    competition = 1
+    competition = 0
     if competition == 1:
         tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name = get_competition_datasets(
             data_path,
@@ -174,6 +174,10 @@ def decode_tueg(
             min_age,
             max_age,
         )
+        logger.info("n train recs", len(tuabn_train.description))
+        logger.info("n train subjects", tuabn_train.description.subject.nunique())
+        logger.info("n valid recs", len(tuabn_valid.description))
+        logger.info("n valid subjects", tuabn_valid.description.subject.nunique())
     title = create_title(
         final_eval,
         len(tuabn_train.datasets),
