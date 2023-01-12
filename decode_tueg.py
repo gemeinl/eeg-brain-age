@@ -295,6 +295,19 @@ def decode_tueg(
     save_csv(scores, out_dir, 'train_end_scores.csv')
     
     if competition == 1:
+        if final_eval == 1:
+            valid_rest = _create_windows(
+                valid_rest,
+                window_size_samples,
+                n_jobs, 
+                preload,
+                n_preds_per_input,
+                mapping,
+            )
+            y_pred = estimator.predict_trials(valid_rest, return_targets=False)
+            y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
+            valid_rest_df = pd.DataFrame({'id': valid_rest.description['id'], 'age': y_pred})
+            valid_rest_df.to_csv(os.path.join(out_dir, 'submission.csv'), index=False)
         return
 
     # TODO: rename valid_rest to smth meaningfull
@@ -604,13 +617,14 @@ def get_competition_datasets(
         logger.debug(f'using condition {condition} data only')
         tuabn_train = tuabn_train.split('condition')[condition]
     if final_eval == 1:
-        # with open(os.path.join(data_path.replace('training', 'testing'), f'test_{sfreq}_hz.pkl'), 'rb') as f:
-        #     tuabn_valid = pickle.load(f)
-        # fake valid set, since we don't have labels for test set and cannot track performance during training
+        with open(os.path.join(data_path.replace('training', 'testing'), f'test_{sfreq}_hz.pkl'), 'rb') as f:
+            tuabn_eval = pickle.load(f)
         tuabn_valid = tuabn_train.split([0])['0']
     else:
         tuabn_train, tuabn_valid = _get_train_valid_datasets(
             tuabn_train, target_name, valid_set_i, False)
+        tuabn_eval = None
+        logger.debug(f'there are {len(tuabn_train.datasets)} recordings in train and {len(tuabn_valid.datasets)} in valid')
     if n_train_recordings != -1:
         tuabn_train = tuabn_train.split([list(range(n_train_recordings))])['0']
     if tmin != -1 or tmax != -1:
@@ -618,10 +632,7 @@ def get_competition_datasets(
         [tuabn_train, tuabn_valid] = [
             preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
         ]
-    [tuabn_train, tuabn_valid] = [
-        preprocess(ds, preprocessors=[Preprocessor('drop_channels', ch_names=['Cz'])], n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
-    ]
-    return tuabn_train, tuabn_valid, None, None, None
+    return tuabn_train, tuabn_valid, None, tuabn_eval, 'public_test'
     
 
 def get_datasets(
@@ -826,6 +837,7 @@ def get_model(
         )
     elif model_name == 'deep':
         lr = 0.01
+        # lr = 3e-4
         weight_decay = 0.5 * 0.001
         final_conv_length = 1
         if target_name == 'age':
@@ -901,12 +913,16 @@ def get_model(
             model = new_model
     # add a sigmoid to the end of model
     if target_name == 'age' and squash_outs:
-        new_model = torch.nn.Sequential()
-        new_model.add_module(model_name, model)
-        new_model.add_module('sigmoid', torch.nn.Sigmoid())
-        model = new_model
+        model = add_sigmoid(model_name, model)
     logger.info(model)
     return model, lr, weight_decay
+
+
+def add_sigmoid(model_name, model):
+    new_model = torch.nn.Sequential()
+    new_model.add_module(model_name, model)
+    new_model.add_module('sigmoid', torch.nn.Sigmoid())
+    return new_model
 
 
 def get_n_preds_per_input(
@@ -1551,7 +1567,6 @@ def set_augmentation(
             'flipfb': ChannelsSymmetryFB(probability=probability, ordered_ch_names=ch_names, random_state=seed),
             'fliplr': ChannelsSymmetry(probability=probability, ordered_ch_names=ch_names, random_state=seed),
         })
-
     """More options:
         FTSurrogate,
         BandstopFilter,
@@ -1740,6 +1755,7 @@ def _predict_ds(
     return preds, targets
 
 
+# TODO: compute longitudinal statistics on session level as multiple recs in one session could bias average time
 def get_longitudinal_ds(kind, subset):
     try:
         ds_path = f'/work/longitudinal/{kind}.pkl'
@@ -2372,8 +2388,9 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     # plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
 
     ax1.legend(fontsize=fs, loc="lower left")
-    ax1.set_title("Male ({:.1f}%)".format(100 * float(len(male_df) / len(df))),
-                  fontsize=fs, loc="left", y=.95, x=.05)
+    ax1.set_title(f"Male ({100 * float(len(male_df) / len(df)):.1f}%)"
+                  f"\nn_recordings: {len(male_df)}\nn_subjects: {male_df['subject'].nunique()}",
+                  fontsize=fs, loc="left", y=.90, x=.05)
     ax1.invert_xaxis()
 
     # second axis
@@ -2404,8 +2421,9 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     ax2.legend(fontsize=fs, loc="lower right")
     ax2.set_xlim(0, ylim)
     # ax1.invert_yaxis()
-    ax2.set_title("Female ({:.1f}%)".format(100 * len(female_df) / len(df)),
-                  fontsize=fs, loc="right", y=.95, x=.95)  # , y=.005)
+    ax2.set_title(f"Female ({100 * len(female_df) / len(df):.1f}%)"
+                  f"\nn_recordings: {len(female_df)}\nn_subjects: {female_df['subject'].nunique()}",
+                  fontsize=fs, loc="right", y=.90, x=.95)  # , y=.005)
 
     plt.ylim(0, 100)
     plt.subplots_adjust(wspace=0, hspace=0)
@@ -2507,7 +2525,7 @@ def plot_recording_interval_hist(df, clip_value, c, ax=None):
     all_day_diffs = []
     for subj, g in df.groupby('subject'):
         diff = g[['year', 'month', 'day']].sort_values(['year', 'month', 'day']).diff()
-        day_diff = diff['year'] * 365 + diff['month'] * 30 + diff['day']
+        day_diff = diff['year'] * 365 + diff['month'] * 30 + diff['day']  # TODO: compute date diff using datetime
         day_diff = day_diff.iloc[1:]
         assert np.isfinite(day_diff).all()
         all_day_diffs.append(day_diff)
