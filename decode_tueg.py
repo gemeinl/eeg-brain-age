@@ -1887,8 +1887,171 @@ def plot_learning(
     return ax
 
 
-# TODO: accept a thresh as input (valid thresh for eval preds)
+def find_threshs(df):
+    gaps = df.gap.values
+    sorted_gaps = df.gap.sort_values().values
+
+    accs = []
+    for g in sorted_gaps:
+        accs.append([g, balanced_accuracy_score(df.pathological, gaps > g)])
+    gap_df = pd.DataFrame(accs, columns=['g', 'acc'])
+    t_1 = gap_df.iloc[gap_df.acc.argmax()].g
+
+    accs2 = []
+    for g in sorted_gaps[sorted_gaps<t_1]:
+        accs2.append([g, balanced_accuracy_score(df.pathological, gaps < g)])
+    gap_df2 = pd.DataFrame(accs2, columns=['g', 'acc'])
+    t_2 = gap_df2.iloc[gap_df2.acc.argmax()].g
+
+    #acc = balanced_accuracy_score(df.pathological, (gaps < t_2) | (gaps > t_1))
+    return (t_2, t_1) if t_2 < t_1 else (t_1, t_2)
+
+
+def plot_age_gap_hist_with_thresh_and_permutation_test(g1, bin_width, n_repetitions):
+    ax0, ax1 = get_hist_perm_test_grid()
+
+    ax0, t_low, t_high = plot_age_gap_hist_with_threshs(g1, ax=ax0)
+    observed, sampled = accuracy_perumtations(g1, n_repetitions)
+    # overwrite 'observation' with just 1 threshold
+    observed = balanced_accuracy_score(
+        g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
+    print(observed)
+
+    ax0.set_title('')
+    ax1.axhline(observed, c='lightgreen')
+    sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
+    ax1.legend(['Observed', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
+    ax1.set_ylabel('Accuracy [%]')
+    ylim = np.max(np.abs(np.array(ax1.get_ylim())-50))
+    ax1.set_ylim(50-ylim, 50+ylim)
+    # set violin alpha = .5
+    # https://github.com/mwaskom/seaborn/issues/622
+    from matplotlib.collections import PolyCollection
+    for art in ax1.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.5)
+    return ax0
+
+
+def plot_age_gap_hist_with_threshs(g1, ax=None):
+    t_low, t_high = find_threshs(g1)
+    print(t_low, t_high)
+    g1['Pathological'] = g1.pathological == 1
+    
+    bin_width = 2
+    bins = np.concatenate([
+        np.arange(0, - g1.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
+        np.arange(bin_width, g1.gap.max() + bin_width, bin_width, dtype=int)
+    ])
+    
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+    ax = sns.histplot(data=g1, x='gap', hue='Pathological', palette=['b', 'r'], ax=ax, 
+                      bins=bins)
+    ax.set_xlabel('Chronological Age – Decoded Age [years]')
+    ax.axvline(t_high, c='lightgreen')
+    ax.axvline(t_low, c='lightgreen')
+    ax.axvline(g1[g1['pathological'] == True]['gap'].mean(), c='magenta')
+    ax.axvline(g1[g1['pathological'] == False]['gap'].mean(), c='cyan')
+    max_abs_v = g1.gap.abs().max()*1.1
+    ax.set_xlim(-max_abs_v, max_abs_v)
+
+    ax.axvspan(
+        t_high, ax.get_xlim()[1],
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        ax.get_xlim()[0], t_low, 
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        t_low, t_high,
+        facecolor='teal', alpha=.1, zorder=-100,
+    )
+
+    # in the center of sections add text what it means
+    x1 = t_low + (ax.get_xlim()[0] - t_low) / 2
+    x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
+    x3 = t_low + (t_high - t_low) / 2
+    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
+    ax.text(x1, y, "True", ha='right', weight='bold', c='r')
+    ax.text(x3, y, "False", ha='center', weight='bold', c='b')
+    ax.text(x2, y, "True", ha='left', weight='bold', c='r')
+    return ax, t_low, t_high
+
+
 def plot_thresh_to_acc(
+    df,
+    ax=None,
+):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+    sorted_gaps = df['gap'].sort_values().to_numpy()
+    gaps = df['gap']
+    # fix legend
+    df['Pathological'] = df.pathological == 1
+
+    accs = []
+    for i in range(1, len(sorted_gaps)):
+        for j in range(i):
+            thresh_high = sorted_gaps[i]
+            thresh_low = sorted_gaps[j]
+            y_true=df['pathological'].to_numpy(dtype=int)
+            y_pred=((gaps > thresh_high) | (gaps < thresh_low)).to_numpy(dtype=int)
+            #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
+            accs.append(
+                (i, j, balanced_accuracy_score(y_true=y_true, y_pred=y_pred))
+            )
+        print(i/len(sorted_gaps))
+    print("ij done")
+    thresh_df = pd.DataFrame(accs, columns=['i', 'j', 'acc'])
+    i, j, acc = thresh_df.iloc[thresh_df.acc.argmax()]
+    t_high, t_low = sorted_gaps[int(i)], sorted_gaps[int(j)]
+    t_low, t_high, acc * 100
+
+    bin_width = 2
+    bins = np.concatenate([
+        np.arange(0, - df.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
+        np.arange(bin_width, df.gap.max() + bin_width, bin_width, dtype=int)
+    ])
+    bins
+
+    ax = sns.histplot(data=df, x='gap', hue='Pathological', palette=['b', 'r'], ax=ax, 
+                      bins=bins)
+    ax.set_xlabel('Chronological Age – Decoded Age [years]')
+    #ax.axvline(t_high, c='lightgreen')
+    #ax.axvline(t_low, c='lightgreen')
+    ax.axvline(df[df['pathological'] == True]['gap'].mean(), c='magenta')
+    ax.axvline(df[df['pathological'] == False]['gap'].mean(), c='cyan')
+    max_abs_v = gaps.abs().max()*1.1
+    ax.set_xlim(-max_abs_v, max_abs_v)
+
+    ax.axvspan(
+        t_high, ax.get_xlim()[1],
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        ax.get_xlim()[0], t_low, 
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        t_low, t_high,
+        facecolor='teal', alpha=.1, zorder=-100,
+    )
+
+    # in the center of sections add text what it means
+    x1 = t_low + (ax.get_xlim()[0] - t_low) / 2
+    x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
+    x3 = t_low + (t_high - t_low) / 2
+    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
+    ax.text(x1, y, "True", ha='right', weight='bold', c='r')
+    ax.text(x3, y, "False", ha='center', weight='bold', c='b')
+    ax.text(x2, y, "True", ha='left', weight='bold', c='r')  
+    return ax
+
+
+# TODO: accept a thresh as input (valid thresh for eval preds)
+def plot_thresh_to_acc_old(
     df,
     ax=None,
 ):
@@ -2278,8 +2441,39 @@ def plot_age_gap_hist(
     ax.set_xlim(-max_abs_gap, max_abs_gap)
     ax.set_xlabel('Chronological Age − Decoded Age [years]')
     ax.set_title(f'Brain age gap')
-    ax.legend(title='Pathological')
+    ax.legend(title='Pathological', loc='upper left')
     return ax
+
+
+def get_hist_perm_test_grid():
+    fig, ax = plt.subplots(1, 1, figsize=(18,4))
+    ax0 = plt.subplot2grid((3, 20), (0, 0), rowspan=3, colspan=17, fig=fig)
+    ax1 = plt.subplot2grid((3, 20), (0, 17), rowspan=3, colspan=3, fig=fig)
+    ax1.yaxis.tick_right()
+    ax1.yaxis.set_label_position("right")
+    return ax0, ax1
+
+
+def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions):
+    ax0, ax1 = get_hist_perm_test_grid()
+
+    plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
+    observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, True)
+    
+    ax0.set_title('')
+    ax1.axhline(observed, c='lightgreen')
+    sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
+    ylim = np.max(np.abs(np.array(ax1.get_ylim())))
+    ax1.set_ylim(-ylim, ylim)
+    # set violin alpha = .5
+    # https://github.com/mwaskom/seaborn/issues/622
+    from matplotlib.collections import PolyCollection
+    for art in ax1.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.5)
+    ax1.legend(['Observed', 'Sampled'], loc='lower center', 
+               bbox_to_anchor=(.5, -.2))
+    return ax0
 
 
 def accuracy_perumtations(df, n_repetitions):
@@ -2317,10 +2511,11 @@ def age_gap_diff_permutations(df, n_repetitions, subject_wise):
     return mean_gap_diff, mean_gap_diffs
 
 
-def plot_violin(y, sampled_y, xlabel, center_value=0):
-    fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+        ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
     ax.axvline(y, c='lightgreen')
-    ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
