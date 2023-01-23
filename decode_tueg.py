@@ -480,7 +480,7 @@ def get_preprocessors(
     return preprocessors
 
 
-def get_train_eval_datasets(tuabn_train, target_name):
+def get_train_eval_datasets_old(tuabn_train, target_name):
     if target_name in ['age', 'age_clf']:
         logger.debug(f"into train (0.9) and eval (0.1).")
         train_ids, eval_ids = train_eval_split(tuabn_train.description)
@@ -496,14 +496,14 @@ def get_train_eval_datasets(tuabn_train, target_name):
     return tuabn_train, tuabn_eval
 
 
-def get_train_valid_datasets(tuabn_train, target_name, valid_set_i):
+def get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
-    tuabn_train, _ = get_train_eval_datasets(tuabn_train, target_name)
+    tuabn_train, _ = get_train_eval_datasets_old(tuabn_train, target_name)
     shuffle = True if target_name in ['age', 'age_clf'] else False
-    return _get_train_valid_datasets(tuabn_train, target_name, valid_set_i, shuffle)
+    return _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle)
 
 
-def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i, shuffle):
+def _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle):
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
     logger.debug(f"into train (.8) and valid (.2).")
     # for pathology decoding, turn off shuffling and make time series split chronologically
@@ -514,6 +514,96 @@ def _get_train_valid_datasets(tuabn_train, target_name, valid_set_i, shuffle):
     tuabn_valid = tuabn_train.split(valid_ids)['0']
     tuabn_train = tuabn_train.split(train_ids)['0']
     return tuabn_train, tuabn_valid
+
+
+def get_train_valid_datasets(
+    tuabn_train, 
+    target_name, 
+    subject_wise, 
+    shuffle, 
+    seed,
+):
+    logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
+    tuabn_train, _ = get_train_eval_datasets(
+        tuabn_train, target_name, subject_wise, shuffle, seed)
+    shuffle = True if target_name in ['age', 'age_clf'] else False
+    return _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle)
+
+
+def _get_train_valid_datasets(
+    tuabn_train, 
+    target_name, 
+    subject_wise, 
+    shuffle, 
+    seed,
+):
+    logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+    logger.debug(f"into train (.8) and valid (.2).")
+    # for pathology decoding, turn off shuffling and make time series split chronologically
+    train_ids, valid_ids = split(
+        tuabn_train.description, subject_wise, valid_set_i, shuffle, seed)
+    intersection = np.intersect1d(train_ids, valid_ids)
+    if intersection.any():
+        raise RuntimeError(f"leakage train / valid detected {intersection}")
+    tuabn_valid = tuabn_train.split(valid_ids)['0']
+    tuabn_train = tuabn_train.split(train_ids)['0']
+    return tuabn_train, tuabn_valid
+
+
+def get_train_eval_datasets(
+    tuabn_train, 
+    target_name, 
+    subject_wise, 
+    shuffle, 
+    seed,
+):
+    if target_name in ['age', 'age_clf']:
+        logger.debug(f"into train (0.9) and eval (0.1).")
+        train_ids, eval_ids = split(
+            tuabn_train.description, subject_wise, shuffle, seed)
+        intersection = np.intersect1d(train_ids, eval_ids)
+        if intersection.any():
+            raise RuntimeError(f"leakage train / eval detected {intersection}")
+        tuabn_eval = tuabn_train.split(eval_ids)['0']
+        tuabn_train = tuabn_train.split(train_ids)['0']
+    else:
+        assert not subject_wise
+        assert not shuffle
+        logger.debug(f"using predefined train and eval set as provided by TUH")
+        tuabn_eval = tuabn_train.split('train')['False']
+        tuabn_train = tuabn_train.split('train')['True']
+    return tuabn_train, tuabn_eval
+
+
+def split(df, subject_wise=True, valid_set_i=None, shuffle=True, seed=20220429):
+    if valid_set_i is None:
+        # train eval split
+        train, valid = _split(df, subject_wise, 1/10, shuffle, seed)
+    else:
+        # train valid split
+        imax = 5
+        assert valid_set_i in range(imax)
+        train = df.copy()
+        valid_sets = {}
+        split_sizes = {0: 1/5, 1: 1/4, 2: 1/3, 3: 1/2}
+        for i in range(imax-1):
+            train, valid = _split(train, subject_wise, 1/(5-i), shuffle, seed)
+            valid_sets[i] = valid
+        valid_sets[imax-1] = train
+        valid = valid_sets.pop(valid_set_i)
+        train = pd.concat([v for k, v in valid_sets.items()])
+    return sorted(train.index.to_list()), sorted(valid.index.to_list())
+    
+
+def _split(df, subject_wise, test_size, shuffle, seed):
+    train, valid = train_test_split(
+        df.subject.unique() if subject_wise else df,
+        test_size=test_size, random_state=seed, shuffle=shuffle,
+    )
+    if subject_wise:
+        train = df.loc[df.subject.isin(train)]
+        valid = df.loc[df.subject.isin(valid)]
+    return train, valid
 
 
 def match_pathological_distributions(d):
@@ -1920,7 +2010,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(g1, bin_width, n_repetiti
     ax0.set_title('')
     ax1.axhline(observed, c='lightgreen')
     sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
-    ax1.legend(['Observed', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
+    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
     ax1.set_ylabel('Accuracy [%]')
     ylim = np.max(np.abs(np.array(ax1.get_ylim())-50))
     ax1.set_ylim(50-ylim, 50+ylim)
@@ -1936,7 +2026,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(g1, bin_width, n_repetiti
 def plot_age_gap_hist_with_threshs(g1, ax=None):
     t_low, t_high = find_threshs(g1)
     print(t_low, t_high)
-    g1['Pathological'] = g1.pathological == 1
+    #g1['Pathological'] = g1.pathological == 1
     
     bin_width = 2
     bins = np.concatenate([
@@ -1946,13 +2036,27 @@ def plot_age_gap_hist_with_threshs(g1, ax=None):
     
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12, 3))
-    ax = sns.histplot(data=g1, x='gap', hue='Pathological', palette=['b', 'r'], ax=ax, 
-                      bins=bins)
+    g1_patho = g1[g1.pathological == 1]
+    g1_non_patho = g1[g1.pathological == 0]
+    
+    #ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, label='False')
+    #ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
+    
+    ax = sns.histplot(data=g1_non_patho, x='gap', color='b', ax=ax, bins=bins, kde=True, label='False')
+    ax = sns.histplot(data=g1_patho, x='gap', color='r', ax=ax, bins=bins, kde=True, label='True')
+    
+    patho_mean = g1[g1['pathological'] == True]['gap'].mean()
+    non_patho_mean = g1[g1['pathological'] == False]['gap'].mean()
+    ax.axvline(non_patho_mean, c='cyan', label=f'False mean ({non_patho_mean:.2f})')
+    ax.axvline(patho_mean, c='magenta', label=f'True mean ({patho_mean:.2f})')
+    
     ax.set_xlabel('Chronological Age – Decoded Age [years]')
-    ax.axvline(t_high, c='lightgreen')
-    ax.axvline(t_low, c='lightgreen')
-    ax.axvline(g1[g1['pathological'] == True]['gap'].mean(), c='magenta')
-    ax.axvline(g1[g1['pathological'] == False]['gap'].mean(), c='cyan')
+
+    ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
+    ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
+
+    ax.legend(title='Pathological', loc='upper left')
+    
     max_abs_v = g1.gap.abs().max()*1.1
     ax.set_xlim(-max_abs_v, max_abs_v)
 
@@ -1974,9 +2078,9 @@ def plot_age_gap_hist_with_threshs(g1, ax=None):
     x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
     x3 = t_low + (t_high - t_low) / 2
     y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
-    ax.text(x1, y, "True", ha='right', weight='bold', c='r')
-    ax.text(x3, y, "False", ha='center', weight='bold', c='b')
-    ax.text(x2, y, "True", ha='left', weight='bold', c='r')
+    #ax.text(x1, y, "True", ha='right', weight='bold', c='r')
+    #ax.text(x3, y, "False", ha='center', weight='bold', c='b')
+    #ax.text(x2, y, "True", ha='left', weight='bold', c='r')
     return ax, t_low, t_high
 
 
@@ -2427,8 +2531,8 @@ def plot_age_gap_hist(
     ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
     mean_non_patho_gap = non_patho_df.gap.mean()
     mean_patho_gap = patho_df.gap.mean()
-    ax.axvline(mean_non_patho_gap, c='cyan')
-    ax.axvline(mean_patho_gap, c='magenta')
+    ax.axvline(mean_non_patho_gap, c='cyan', label=f'False mean ({mean_non_patho_gap:.2f})')
+    ax.axvline(mean_patho_gap, c='magenta', label=f'True mean ({mean_patho_gap:.2f})')
 #     if mean_patho_gap > mean_non_patho_gap:
 #         ax.text(mean_non_patho_gap + (mean_patho_gap - mean_non_patho_gap)/2, ax.get_ylim()[1], 
 #                 f"{(mean_patho_gap - mean_non_patho_gap):.2f}", fontweight='bold',
@@ -2471,8 +2575,9 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions)
     for art in ax1.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
-    ax1.legend(['Observed', 'Sampled'], loc='lower center', 
+    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', 
                bbox_to_anchor=(.5, -.2))
+    ax1.set_ylabel('Chronological Age – Decoded Age [years]')
     return ax0
 
 
