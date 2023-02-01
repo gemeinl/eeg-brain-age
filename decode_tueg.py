@@ -173,11 +173,12 @@ def decode_tueg(
             seed,
             min_age,
             max_age,
+            shuffle_data_before_split,
         )
-        logger.info("n train recs", len(tuabn_train.description))
-        logger.info("n train subjects", tuabn_train.description.subject.nunique())
-        logger.info("n valid recs", len(tuabn_valid.description))
-        logger.info("n valid subjects", tuabn_valid.description.subject.nunique())
+        logger.info(f"n train recs {len(tuabn_train.description)}")
+        logger.info(f"n train subjects {tuabn_train.description.subject.nunique()}")
+        logger.info(f"n valid recs {len(tuabn_valid.description)}")
+        logger.info(f"n valid subjects {tuabn_valid.description.subject.nunique()}")
     title = create_title(
         final_eval,
         len(tuabn_train.datasets),
@@ -313,7 +314,9 @@ def decode_tueg(
             valid_rest_df = pd.DataFrame({'id': valid_rest.description['id'], 'age': y_pred})
             valid_rest_df.to_csv(os.path.join(out_dir, 'submission.csv'), index=False)
         return
-
+    logger.info('done.')
+    return
+    
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
     # predict valid rest and longitudinal datasets
@@ -480,6 +483,7 @@ def get_preprocessors(
     return preprocessors
 
 
+"""
 def get_train_eval_datasets_old(tuabn_train, target_name):
     if target_name in ['age', 'age_clf']:
         logger.debug(f"into train (0.9) and eval (0.1).")
@@ -514,43 +518,10 @@ def _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle
     tuabn_valid = tuabn_train.split(valid_ids)['0']
     tuabn_train = tuabn_train.split(train_ids)['0']
     return tuabn_train, tuabn_valid
+"""
 
 
-def get_train_valid_datasets(
-    tuabn_train, 
-    target_name, 
-    subject_wise, 
-    shuffle, 
-    seed,
-):
-    logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
-    tuabn_train, _ = get_train_eval_datasets(
-        tuabn_train, target_name, subject_wise, shuffle, seed)
-    shuffle = True if target_name in ['age', 'age_clf'] else False
-    return _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle)
-
-
-def _get_train_valid_datasets(
-    tuabn_train, 
-    target_name, 
-    subject_wise, 
-    shuffle, 
-    seed,
-):
-    logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
-    logger.debug(f"into train (.8) and valid (.2).")
-    # for pathology decoding, turn off shuffling and make time series split chronologically
-    train_ids, valid_ids = split(
-        tuabn_train.description, subject_wise, valid_set_i, shuffle, seed)
-    intersection = np.intersect1d(train_ids, valid_ids)
-    if intersection.any():
-        raise RuntimeError(f"leakage train / valid detected {intersection}")
-    tuabn_valid = tuabn_train.split(valid_ids)['0']
-    tuabn_train = tuabn_train.split(train_ids)['0']
-    return tuabn_train, tuabn_valid
-
-
-def get_train_eval_datasets(
+def _get_train_eval_datasets(
     tuabn_train, 
     target_name, 
     subject_wise, 
@@ -558,12 +529,14 @@ def get_train_eval_datasets(
     seed,
 ):
     if target_name in ['age', 'age_clf']:
+        if subject_wise:
+            logger.debug("subject wise ")
         logger.debug(f"into train (0.9) and eval (0.1).")
         train_ids, eval_ids = split(
-            tuabn_train.description, subject_wise, shuffle, seed)
+            tuabn_train.description, subject_wise, None, shuffle, seed)
         intersection = np.intersect1d(train_ids, eval_ids)
         if intersection.any():
-            raise RuntimeError(f"leakage train / eval detected {intersection}")
+            raise RuntimeError(f"recording leakage train / eval detected {intersection}")
         tuabn_eval = tuabn_train.split(eval_ids)['0']
         tuabn_train = tuabn_train.split(train_ids)['0']
     else:
@@ -572,10 +545,67 @@ def get_train_eval_datasets(
         logger.debug(f"using predefined train and eval set as provided by TUH")
         tuabn_eval = tuabn_train.split('train')['False']
         tuabn_train = tuabn_train.split('train')['True']
+    intersection = np.intersect1d(
+        tuabn_eval.description.subject, tuabn_train.description.subject)
+    if intersection.any():
+        raise RuntimeError(f"subject leakage train / eval detected {intersection}")
     return tuabn_train, tuabn_eval
 
 
-def split(df, subject_wise=True, valid_set_i=None, shuffle=True, seed=20220429):
+def get_dataset_splits(
+    tuabn_train, 
+    target_name, 
+    valid_set_i,
+    subject_wise, 
+    shuffle, 
+    seed,
+):
+    logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
+    # use fixed seed here to always have the same train eval split
+    tuabn_train, tuabn_eval = _get_train_eval_datasets(
+        tuabn_train, target_name, subject_wise, shuffle, 20230111)
+    logger.debug(f'after train eval {len(tuabn_train.datasets)}')
+    shuffle = True if target_name in ['age', 'age_clf'] else False
+    tuabn_train, tuabn_valid = _get_train_valid_datasets(
+        tuabn_train, target_name, subject_wise, valid_set_i, shuffle, seed)
+    logger.debug(f'after train valid {len(tuabn_train.datasets)}')
+    intersection = np.intersect1d(
+        tuabn_valid.description.subject, tuabn_train.description.subject)
+    if subject_wise and intersection.any():
+        raise RuntimeError(f"subject leakage train / valid detected {intersection}")
+    return tuabn_eval, tuabn_train, tuabn_valid
+
+
+def _get_train_valid_datasets(
+    tuabn_train, 
+    target_name, 
+    subject_wise, 
+    valid_set_i,
+    shuffle, 
+    seed,
+):
+    logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+    if subject_wise:
+        logger.debug("subject wise ")
+    logger.debug(f"into train (.8) and valid (.2).")
+    # for pathology decoding, turn off shuffling and make time series split chronologically
+    train_ids, valid_ids = split(
+        tuabn_train.description, subject_wise, valid_set_i, shuffle, seed)
+    intersection = np.intersect1d(train_ids, valid_ids)
+    if intersection.any():
+        raise RuntimeError(f"recording leakage train / valid detected {intersection}")
+    tuabn_valid = tuabn_train.split(valid_ids)['0']
+    tuabn_train = tuabn_train.split(train_ids)['0']
+    return tuabn_train, tuabn_valid
+
+
+def split(
+    df,
+    subject_wise,
+    valid_set_i,
+    shuffle,
+    seed,
+):
     if valid_set_i is None:
         # train eval split
         train, valid = _split(df, subject_wise, 1/10, shuffle, seed)
@@ -595,7 +625,13 @@ def split(df, subject_wise=True, valid_set_i=None, shuffle=True, seed=20220429):
     return sorted(train.index.to_list()), sorted(valid.index.to_list())
     
 
-def _split(df, subject_wise, test_size, shuffle, seed):
+def _split(
+    df,
+    subject_wise,
+    test_size,
+    shuffle,
+    seed,
+):
     train, valid = train_test_split(
         df.subject.unique() if subject_wise else df,
         test_size=test_size, random_state=seed, shuffle=shuffle,
@@ -650,6 +686,8 @@ def add_ages_from_additional_sources(ds):
             birthyear = int(matches[0])
         d_.description['date_age'] = int(rec_year) - birthyear
         pattern = r'(\d+)[ -]+?[years]{3,5}[ -]+?[old]{3}'
+        # is this also fine? also finds 33 y.o. often used in old reports
+        #pattern = r'(\d+)[ -]+?[years]{1,5}[ -.]+?[old]{1,3}[ .]+?'  
         matches = re.findall(pattern, d_.description.report)
         if len(matches) >= 1:
             # assume report always starts with 'XX year old ...'
@@ -660,6 +698,7 @@ def add_ages_from_additional_sources(ds):
     return ds
 
 
+"""
 def get_competition_datasets(
     data_path,
     target_name,
@@ -727,7 +766,30 @@ def get_competition_datasets(
             preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
         ]
     return tuabn_train, tuabn_valid, None, tuabn_eval, 'public_test'
-    
+"""
+
+
+def reject_derivating_ages(tuabn_train):
+    logger.info(f'rejecting recordings with > 1 year derivation in header, dates, and report')
+    d = tuabn_train.description
+    logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings in total')
+    # add ages parsed from medical report and computed from recording export date and birth year of patient
+    tuabn_train = add_ages_from_additional_sources(tuabn_train)
+    ids = _reject_derivating_ages(tuabn_train.description)
+    tuabn_train = tuabn_train.split([ids])['0']
+    d = tuabn_train.description
+    logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
+    return tuabn_train
+
+
+def _reject_derivating_ages(description):
+    # if the difference is bigger than one year, possible due to anonymization, reject the recording
+    c1 = (description.age - description.report_age).abs() < 2
+    c2 = (description.age - description.date_age).abs() < 2
+    c3 = (description.date_age - description.report_age).abs() < 2
+    ids = description[c1 & c2 & c3].index.to_list()
+    return ids
+
 
 def get_datasets(
     data_path,
@@ -742,6 +804,7 @@ def get_datasets(
     seed,
     min_age,
     max_age,
+    shuffle_data_before_split,
 ):
     logger.debug("indexing files")
     tuabn_train = TUHAbnormal(
@@ -751,23 +814,13 @@ def get_datasets(
         n_jobs=n_jobs,
         target_name = 'age' if target_name in ['age', 'age_clf'] else target_name,
     )
+    logger.debug(f'after read {len(tuabn_train.datasets)}')
     
     exclude_derivating_ages = 1
     if exclude_derivating_ages != -1:
-        logger.info(f'rejecting recordings with > 1 year derivation in header, dates, and report')
-        d = tuabn_train.description
-        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings in total')
-        # add ages parsed from medical report and computed from recording export date and birth year of patient
-        tuabn_train = add_ages_from_additional_sources(tuabn_train)
-        # if the difference is bigger than one year, possible due to anonymization, reject the recording
-        c1 = (tuabn_train.description.age - tuabn_train.description.report_age).abs() < 2
-        c2 = (tuabn_train.description.age - tuabn_train.description.date_age).abs() < 2
-        c3 = (tuabn_train.description.date_age - tuabn_train.description.report_age).abs() < 2
-        ids = tuabn_train.description[c1 & c2 & c3].index.to_list()
-        tuabn_train = tuabn_train.split([ids])['0']
-        d = tuabn_train.description
-        logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
-    
+        tuabn_train = reject_derivating_ages(tuabn_train)
+    logger.debug(f'after exclude {len(tuabn_train.datasets)}')
+
     subsample = -1
     if subsample != -1:
         logger.info(f'subsampling age distributions for pathological and non-pathological recordings ({subsample})')
@@ -783,11 +836,23 @@ def get_datasets(
         d = tuabn_train.description
         logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
         
-    if final_eval == 1:
-        logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
-        tuabn_train, tuabn_valid = get_train_eval_datasets(tuabn_train, target_name)
-    else:
-        tuabn_train, tuabn_valid = get_train_valid_datasets(tuabn_train, target_name, valid_set_i)
+    # split into train / eval | train / valid
+    logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+    tuabn_eval, tuabn_train, tuabn_valid = get_dataset_splits(
+            tuabn_train, target_name, valid_set_i, subject_wise=True, 
+        shuffle=shuffle_data_before_split, seed=seed,
+    )
+    logger.debug(f'after split {len(tuabn_train.datasets)}')
+    # free memory if eval set is not needed
+    if final_eval != 1:
+        tuabn_eval = None
+#    if final_eval == 1:
+#        logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+#        tuabn_train, tuabn_valid = get_train_eval_datasets(
+#            tuabn_train, target_name, subject_wise=True, shuffle=True, seed=seed)
+#    else:
+#        tuabn_train, tuabn_valid = get_train_valid_datasets(
+#            tuabn_train, target_name, valid_set_i, subject_wise=True, shuffle=True, seed=seed)
 
     # select normal/abnormal only
     logger.info(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
@@ -808,9 +873,8 @@ def get_datasets(
         valid_rest = subselect(dataset=valid_rest, subset=(min_age, max_age))
         logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                      f" ({len(tuabn_valid.datasets)})")
-
+        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
     valid_rest_name = f'valid_not_{subset}'
-    logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # reduce number of train recordings
     if n_train_recordings != -1:
@@ -1115,14 +1179,14 @@ def get_avg_ch_mean_n_std(
     # note: mean and std are in microvolts already
     mean_df = pd.concat(
         objs=[
-            pd.read_csv(f.replace(f[f.find('.'):], '_stats.csv'), index_col=0)['mean'] 
+            pd.read_csv(f.replace(f[f.find('.edf'):], '_stats.csv'), index_col=0)['mean'] 
             for f in tuabn.description['path']
         ], 
         axis=1,
     )
     std_df = pd.concat(
         objs=[
-            pd.read_csv(f.replace(f[f.find('.'):], '_stats.csv'), index_col=0)['std'] 
+            pd.read_csv(f.replace(f[f.find('.edf'):], '_stats.csv'), index_col=0)['std'] 
             for f in tuabn.description['path']
         ], 
         axis=1,
@@ -1997,15 +2061,23 @@ def find_threshs(df):
     return (t_2, t_1) if t_2 < t_1 else (t_1, t_2)
 
 
-def plot_age_gap_hist_with_thresh_and_permutation_test(g1, bin_width, n_repetitions):
+def plot_age_gap_hist_with_thresh_and_permutation_test(
+    g1,
+    bin_width,
+    n_repetitions,
+    t_low=None,
+    t_high=None,
+):
     ax0, ax1 = get_hist_perm_test_grid()
 
-    ax0, t_low, t_high = plot_age_gap_hist_with_threshs(g1, ax=ax0)
+    ax0, t_low, t_high = plot_age_gap_hist_with_threshs(
+        g1, ax=ax0, t_low=t_low, t_high=t_high,
+    )
     observed, sampled = accuracy_perumtations(g1, n_repetitions)
     # overwrite 'observation' with just 1 threshold
     observed = balanced_accuracy_score(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
-    print(observed)
+    print('observed score', observed)
 
     ax0.set_title('')
     ax1.axhline(observed, c='lightgreen')
@@ -2023,9 +2095,19 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(g1, bin_width, n_repetiti
     return ax0
 
 
-def plot_age_gap_hist_with_threshs(g1, ax=None):
-    t_low, t_high = find_threshs(g1)
-    print(t_low, t_high)
+def plot_age_gap_hist_with_threshs(
+    g1,
+    ax=None,
+    t_low=None,
+    t_high=None,
+):
+    g1['gap'] = g1.y_pred - g1.y_true
+    if t_low is None and t_high is None:
+        t_low, t_high = find_threshs(g1)
+        print('found thresholds', t_low, t_high)
+    else:
+        print('given thresholds', t_low, t_high)
+
     #g1['Pathological'] = g1.pathological == 1
     
     bin_width = 2
@@ -2050,7 +2132,7 @@ def plot_age_gap_hist_with_threshs(g1, ax=None):
     ax.axvline(non_patho_mean, c='cyan', label=f'False mean ({non_patho_mean:.2f})')
     ax.axvline(patho_mean, c='magenta', label=f'True mean ({patho_mean:.2f})')
     
-    ax.set_xlabel('Chronological Age – Decoded Age [years]')
+    ax.set_xlabel('Decoded Age – Chronological Age [years]')
 
     ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
     ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
@@ -2088,6 +2170,7 @@ def plot_thresh_to_acc(
     df,
     ax=None,
 ):
+    df['gap'] = df.y_pred - df.y_true
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12, 3))
     sorted_gaps = df['gap'].sort_values().to_numpy()
@@ -2122,7 +2205,7 @@ def plot_thresh_to_acc(
 
     ax = sns.histplot(data=df, x='gap', hue='Pathological', palette=['b', 'r'], ax=ax, 
                       bins=bins)
-    ax.set_xlabel('Chronological Age – Decoded Age [years]')
+    ax.set_xlabel('Decoded Age – Chronological Age [years]')
     #ax.axvline(t_high, c='lightgreen')
     #ax.axvline(t_low, c='lightgreen')
     ax.axvline(df[df['pathological'] == True]['gap'].mean(), c='magenta')
@@ -2159,6 +2242,7 @@ def plot_thresh_to_acc_old(
     df,
     ax=None,
 ):
+    df['gap'] = df.y_pred - df.y_true
     # if we only decode normals or abnormals, this will raise 
     #if df.pathological.nunique() == 1:
     #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
@@ -2197,7 +2281,7 @@ def plot_thresh_to_acc_old(
     ax1.plot(df['thresh'], df['acc'], c='lightgreen', label='Thresholds')#, zorder=3)  # does not make sense in mixed case
 
     ax1.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Chronological Age − Decoded Age [years]')
+    ax.set_xlabel('Decoded Age – Chronological Age [years]')
 #     ax.legend(title='Pathological', loc='lower left')
 
     xlim = max(abs(sorted_gaps)) * 1.1
@@ -2506,7 +2590,7 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
 #         sns.lineplot(x=[mae/bin_size, 100], y=[0, 100-mae/bin_size], ax=axs[i], c='k', linewidth=1, linestyle='--')
 #         axs2[i].set_title(
 #             f'Non-pathological\n({mae:.2f} years mae)' if i == 0 else f'Pathological\n({mae:.2f} years mae)')
-    return fig
+    return ax0
 
 
 # TODO: merge hists functions
@@ -2519,6 +2603,7 @@ def plot_age_gap_hist(
     bin_width=5,
     ax=None,
 ):
+    df['gap'] = df.y_pred - df.y_true
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
     bins = np.concatenate([
@@ -2543,7 +2628,7 @@ def plot_age_gap_hist(
 #                 ha='center', va='bottom')
     max_abs_gap = max(abs(df.gap))*1.1
     ax.set_xlim(-max_abs_gap, max_abs_gap)
-    ax.set_xlabel('Chronological Age − Decoded Age [years]')
+    ax.set_xlabel('Decoded Age – Chronological Age [years]')
     ax.set_title(f'Brain age gap')
     ax.legend(title='Pathological', loc='upper left')
     return ax
@@ -2563,6 +2648,7 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions)
 
     plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
     observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, True)
+    print('observed age gap diff', observed)
     
     ax0.set_title('')
     ax1.axhline(observed, c='lightgreen')
@@ -2577,7 +2663,7 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions)
             art.set_alpha(.5)
     ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', 
                bbox_to_anchor=(.5, -.2))
-    ax1.set_ylabel('Chronological Age – Decoded Age [years]')
+    ax1.set_ylabel('Mean Gap Difference [years]')
     return ax0
 
 
@@ -2771,8 +2857,11 @@ def read_result(
         cv_result = []
         for valid_set_i in folds:
             this_exp_dir = os.path.join(exp_dir, valid_set_i)
-            this_result = _read_result(this_exp_dir, result)
-            cv_result.append(this_result)
+            try:
+                this_result = _read_result(this_exp_dir, result)
+                cv_result.append(this_result)
+            except:
+                logger.warning(f'{result} could not be read from {this_exp_dir}')
         cv_result = pd.concat(cv_result, ignore_index=int(result == 'config'))
         exp_results.append(cv_result)
     exp_results = pd.concat(exp_results).sort_values(['seed', 'valid_set_i'])
@@ -2814,6 +2903,11 @@ def _read_result(
         # TODO: add longitudinal preds
         this_result = pd.concat([preds1, preds2])
         this_result['gap'] = this_result.y_true - this_result.y_pred
+    elif result == 'train_repds':
+        pred_path = os.path.join(exp_dir, 'preds', f'train_end_train_preds.csv')
+        this_result = pd.read_csv(pred_path, index_col=0)
+        this_result['subset'] = 'train'
+        logger.warning('untested')
     elif result == 'config':
         this_result = config
     else:
@@ -2911,6 +3005,28 @@ def extract_longitudinal_dataset(description, kind, load):
             ds.append(d)
         ds = BaseConcatDataset(ds)
         return ds
+
+
+def _deconfound(y_true, y_pred, kind):
+    # detrend on all the data points, then analyse per class, b.c. otherwise mean gap is zero for every class
+    if kind == 'quadratic':
+        model = np.poly1d(np.polyfit(y_true, y_pred - y_true, 2))
+        return y_pred - model(y_true)
+    elif kind == 'linear':
+        m, b = np.polyfit(y_true, y_pred - y_true, 1)
+        return y_pred - (m * y_true + b)
+    else:
+        raise ValueError
+
+        
+def deconfound(df, detrend):
+    if detrend is not None:
+        y_true = df.y_true
+        y_pred = df.y_pred
+        y_pred = _deconfound(y_true, y_pred, detrend)
+        df['y_pred'] = y_pred
+        df['gap'] = y_pred-y_true
+    return df
 
 
 if __name__ == "__main__":
