@@ -70,7 +70,6 @@ def _decode_tueg(params):
 # TODO: look at the (negative) outliers reports. why are they outliers?
 def decode_tueg(
     batch_size,
-    condition,
     config,
     data_path,
     date,
@@ -121,7 +120,7 @@ def decode_tueg(
     #warnings.filterwarnings("ignore", message="UserWarning: y_pred contains classes not in y_true")
 
     check_input_args(
-        batch_size, condition, config, data_path, debug, final_eval, intuitive_training_scores,
+        batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
         max_age, min_age, model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, 
         out_dir, preload, seed, shuffle_data_before_split, squash_outs, 
         standardize_data, standardize_targets, subset, target_name, tmax, tmin, 
@@ -142,43 +141,25 @@ def decode_tueg(
     cropped = True
     logger.debug(f"cropped: {cropped}")
 
-    competition = 0
-    if competition == 1:
-        tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name = get_competition_datasets(
-            data_path,
-            target_name,
-            subset,
-            n_train_recordings,
-            tmin,
-            tmax,
-            n_jobs,
-            final_eval,
-            valid_set_i,
-            seed,
-            min_age,
-            max_age,
-            condition,
-        )
-    else:
-        tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
-            data_path, 
-            target_name,
-            subset,
-            n_train_recordings,
-            tmin,
-            tmax,
-            n_jobs, 
-            final_eval,
-            valid_set_i,
-            seed,
-            min_age,
-            max_age,
-            shuffle_data_before_split,
-        )
-        logger.info(f"n train recs {len(tuabn_train.description)}")
-        logger.info(f"n train subjects {tuabn_train.description.subject.nunique()}")
-        logger.info(f"n valid recs {len(tuabn_valid.description)}")
-        logger.info(f"n valid subjects {tuabn_valid.description.subject.nunique()}")
+    tuabn_train, tuabn_valid, mapping, valid_rest, valid_rest_name  = get_datasets(
+        data_path, 
+        target_name,
+        subset,
+        n_train_recordings,
+        tmin,
+        tmax,
+        n_jobs, 
+        final_eval,
+        valid_set_i,
+        seed,
+        min_age,
+        max_age,
+        shuffle_data_before_split,
+    )
+    logger.info(f"n train recs {len(tuabn_train.description)}")
+    logger.info(f"n train subjects {tuabn_train.description.subject.nunique()}")
+    logger.info(f"n valid recs {len(tuabn_valid.description)}")
+    logger.info(f"n valid subjects {tuabn_valid.description.subject.nunique()}")
     title = create_title(
         final_eval,
         len(tuabn_train.datasets),
@@ -268,7 +249,6 @@ def decode_tueg(
         sfreq,
         len(tuabn_train),
         batch_size,
-        competition,
     )
     logger.info(title)
     logger.info(f'starting training')
@@ -299,21 +279,6 @@ def decode_tueg(
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
     
-    if competition == 1:
-        if final_eval == 1:
-            valid_rest = _create_windows(
-                valid_rest,
-                window_size_samples,
-                n_jobs, 
-                preload,
-                n_preds_per_input,
-                mapping,
-            )
-            y_pred = estimator.predict_trials(valid_rest, return_targets=False)
-            y_pred = np.array([np.mean(y_pred_, axis=1) for y_pred_ in y_pred])
-            valid_rest_df = pd.DataFrame({'id': valid_rest.description['id'], 'age': y_pred})
-            valid_rest_df.to_csv(os.path.join(out_dir, 'submission.csv'), index=False)
-        return
     logger.info('done.')
     return
     
@@ -370,7 +335,6 @@ def add_file_logger(
 
 def check_input_args(
     batch_size, 
-    condition,
     config,
     data_path,
     debug,
@@ -446,8 +410,6 @@ def check_input_args(
         assert isinstance(max_age, int)
     if min_age != -1:
         assert isinstance(min_age, int)
-    if condition not in ['EC', 'EO', 'all']:
-        raise ValueError
 
 
 def test_name(final_eval):
@@ -483,42 +445,29 @@ def get_preprocessors(
     return preprocessors
 
 
-"""
-def get_train_eval_datasets_old(tuabn_train, target_name):
-    if target_name in ['age', 'age_clf']:
-        logger.debug(f"into train (0.9) and eval (0.1).")
-        train_ids, eval_ids = train_eval_split(tuabn_train.description)
-        intersection = np.intersect1d(train_ids, eval_ids)
-        if intersection.any():
-            raise RuntimeError(f"leakage train / eval detected {intersection}")
-        tuabn_eval = tuabn_train.split(eval_ids)['0']
-        tuabn_train = tuabn_train.split(train_ids)['0']
-    else:
-        logger.debug(f"using predefined train and eval set as provided by TUH")
-        tuabn_eval = tuabn_train.split('train')['False']
-        tuabn_train = tuabn_train.split('train')['True']
-    return tuabn_train, tuabn_eval
-
-
-def get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i):
+def get_dataset_splits(
+    tuabn_train, 
+    target_name, 
+    valid_set_i,
+    subject_wise, 
+    shuffle, 
+    seed,
+):
     logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
-    tuabn_train, _ = get_train_eval_datasets_old(tuabn_train, target_name)
+    # use fixed seed here and don't shuffle to always have the same train eval split
+    tuabn_train, tuabn_eval = _get_train_eval_datasets(
+        tuabn_train, target_name, subject_wise, shuffle=False, seed=20230111)
+    logger.debug(f'after train eval {len(tuabn_train.datasets)}')
     shuffle = True if target_name in ['age', 'age_clf'] else False
-    return _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle)
-
-
-def _get_train_valid_datasets_old(tuabn_train, target_name, valid_set_i, shuffle):
-    logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
-    logger.debug(f"into train (.8) and valid (.2).")
-    # for pathology decoding, turn off shuffling and make time series split chronologically
-    train_ids, valid_ids = train_valid_split(tuabn_train.description, valid_set_i, shuffle)
-    intersection = np.intersect1d(train_ids, valid_ids)
-    if intersection.any():
-        raise RuntimeError(f"leakage train / valid detected {intersection}")
-    tuabn_valid = tuabn_train.split(valid_ids)['0']
-    tuabn_train = tuabn_train.split(train_ids)['0']
-    return tuabn_train, tuabn_valid
-"""
+    # use input seed here and allow shuffling to enable different, but reproducible splits
+    tuabn_train, tuabn_valid = _get_train_valid_datasets(
+        tuabn_train, target_name, subject_wise, valid_set_i, shuffle, seed)
+    logger.debug(f'after train valid {len(tuabn_train.datasets)}')
+    intersection = np.intersect1d(
+        tuabn_valid.description.subject, tuabn_train.description.subject)
+    if subject_wise and intersection.any():
+        raise RuntimeError(f"subject leakage train / valid detected {intersection}")
+    return tuabn_eval, tuabn_train, tuabn_valid
 
 
 def _get_train_eval_datasets(
@@ -550,30 +499,6 @@ def _get_train_eval_datasets(
     if intersection.any():
         raise RuntimeError(f"subject leakage train / eval detected {intersection}")
     return tuabn_train, tuabn_eval
-
-
-def get_dataset_splits(
-    tuabn_train, 
-    target_name, 
-    valid_set_i,
-    subject_wise, 
-    shuffle, 
-    seed,
-):
-    logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
-    # use fixed seed here to always have the same train eval split
-    tuabn_train, tuabn_eval = _get_train_eval_datasets(
-        tuabn_train, target_name, subject_wise, shuffle, 20230111)
-    logger.debug(f'after train eval {len(tuabn_train.datasets)}')
-    shuffle = True if target_name in ['age', 'age_clf'] else False
-    tuabn_train, tuabn_valid = _get_train_valid_datasets(
-        tuabn_train, target_name, subject_wise, valid_set_i, shuffle, seed)
-    logger.debug(f'after train valid {len(tuabn_train.datasets)}')
-    intersection = np.intersect1d(
-        tuabn_valid.description.subject, tuabn_train.description.subject)
-    if subject_wise and intersection.any():
-        raise RuntimeError(f"subject leakage train / valid detected {intersection}")
-    return tuabn_eval, tuabn_train, tuabn_valid
 
 
 def _get_train_valid_datasets(
@@ -698,77 +623,6 @@ def add_ages_from_additional_sources(ds):
     return ds
 
 
-"""
-def get_competition_datasets(
-    data_path,
-    target_name,
-    subset,
-    n_train_recordings,
-    tmin,
-    tmax,
-    n_jobs,
-    final_eval,
-    valid_set_i,
-    seed,
-    min_age,
-    max_age,
-    condition,
-):
-    train_subj = 1200  # use 10 instead of 1200 training subjects, for demonstration purpose
-    test_subj = 400  # use 10 instead of 400 testing subjects, for demonstration purpose
-    sfreq = 100
-    with open(os.path.join(data_path, f'train_{sfreq}_hz.pkl'), 'rb') as f:
-        tuabn_train = pickle.load(f)
-
-    # order dataset from all EC, then all EO to
-    # EC, EO of subject 1 to EC, EO of last subjects
-    # to easily redruce subject leakage in splitting
-    splits = tuabn_train.split('subject')
-    tuabn_train = BaseConcatDataset([d for s, d in splits.items()])
-    if not tuabn_train.description['condition'][0] != tuabn_train.description['condition'][1]:
-        raise RuntimeError
-
-    # train_raws = {}
-    # for condition in ["EC", "EO"]:
-    #     train_raws[condition] = []
-    #     train_subjs = list(range(1, train_subj + 1))
-    #     for s in train_subjs:
-    #         fname = os.path.join(data_path, f"subj{s:04}_{condition}{sfreq}_hz_raw.fif.gz")
-    #         raw = mne.io.read_raw(fname, preload=False, verbose='error')
-    #         train_raws[condition].append(raw)
-    # meta = pd.read_csv(os.path.join(data_path, "train_subjects.csv"), index_col=0)
-    # meta = pd.concat([meta, meta])
-    # meta['condition'] = len(train_raws['EC']) * ['EC'] + len(train_raws['EO']) * ['EO']
-    # train_raws = train_raws['EC'] + train_raws['EO']
-    # tuabn_train = BaseConcatDataset([
-    #     BaseDataset(raw, target_name=target_name) for raw in train_raws
-    # ])
-    # meta['subject'] = meta['id']
-    # tuabn_train.set_description(meta)
-    
-    if condition in ['EC', 'EO']:
-        logger.debug(f'using condition {condition} data only')
-        tuabn_train = tuabn_train.split('condition')[condition]
-    if final_eval == 1:
-        with open(os.path.join(data_path.replace('training', 'testing'), f'test_{sfreq}_hz.pkl'), 'rb') as f:
-            tuabn_eval = pickle.load(f)
-        tuabn_valid = tuabn_train.split([0])['0']
-    else:
-        tuabn_train, tuabn_valid = _get_train_valid_datasets(
-            tuabn_train, target_name, valid_set_i, False)
-        tuabn_eval = None
-        logger.debug(f'there are {len(tuabn_train.datasets)} recordings in train and {len(tuabn_valid.datasets)} in valid')
-    if n_train_recordings != -1:
-        tuabn_train = tuabn_train.split([list(range(n_train_recordings))])['0']
-    if tmin != -1 or tmax != -1:
-        preprocessors = get_preprocessors(tmin, tmax)
-        [tuabn_train, tuabn_valid] = [
-            preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
-        ]
-    return tuabn_train, tuabn_valid, None, tuabn_eval, 'public_test'
-"""
-
-
 def reject_derivating_ages(tuabn_train):
     logger.info(f'rejecting recordings with > 1 year derivation in header, dates, and report')
     d = tuabn_train.description
@@ -837,22 +691,16 @@ def get_datasets(
         logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings left')
         
     # split into train / eval | train / valid
+    subject_wise = True
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
     tuabn_eval, tuabn_train, tuabn_valid = get_dataset_splits(
-            tuabn_train, target_name, valid_set_i, subject_wise=True, 
+            tuabn_train, target_name, valid_set_i, subject_wise=subject_wise, 
         shuffle=shuffle_data_before_split, seed=seed,
     )
     logger.debug(f'after split {len(tuabn_train.datasets)}')
-    # free memory if eval set is not needed
-    if final_eval != 1:
-        tuabn_eval = None
-#    if final_eval == 1:
-#        logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
-#        tuabn_train, tuabn_valid = get_train_eval_datasets(
-#            tuabn_train, target_name, subject_wise=True, shuffle=True, seed=seed)
-#    else:
-#        tuabn_train, tuabn_valid = get_train_valid_datasets(
-#            tuabn_train, target_name, valid_set_i, subject_wise=True, shuffle=True, seed=seed)
+    if final_eval == 1:
+        tuabn_valid = tuabn_eval
+    tuabn_eval = None
 
     # select normal/abnormal only
     logger.info(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
@@ -1142,32 +990,6 @@ def _create_windows(
         reject=None,
         flat=None,
     )
-
-
-def train_eval_split(df):
-    # fix the seed to always get identical splits
-    seed = 20220429
-    train, eval_ = train_test_split(df, test_size=1/10, random_state=seed)
-    return sorted(train.index.to_list()), sorted(eval_.index.to_list())
-
-
-def train_valid_split(df, valid_set_i, shuffle):
-    # fix the seed to always get identical splits
-    seed = 20220429
-    train, valid1 = train_test_split(df, test_size=1/5, random_state=seed, shuffle=shuffle)
-    train, valid2 = train_test_split(train, test_size=1/4, random_state=seed, shuffle=shuffle)
-    train, valid3 = train_test_split(train, test_size=1/3, random_state=seed, shuffle=shuffle)
-    valid4, valid5 = train_test_split(train, test_size=1/2, random_state=seed, shuffle=shuffle)
-    valid_sets = {
-        0: valid1.index.to_list(),
-        1: valid2.index.to_list(),
-        2: valid3.index.to_list(),
-        3: valid4.index.to_list(),
-        4: valid5.index.to_list(),
-    }
-    valid_is = sorted(valid_sets.pop(valid_set_i))
-    train_is = sorted([l for k, v in valid_sets.items() for l in v])
-    return train_is, valid_is
 
 
 def get_avg_ch_mean_n_std(
@@ -1704,7 +1526,6 @@ def set_augmentation(
     sfreq,
     n_examples,
     batch_size,
-    competition,
 ):
     # TODO: make augment a list of transformations
     if augment == '0':
@@ -1720,11 +1541,6 @@ def set_augmentation(
         'identity': IdentityTransform(),
         'identity': IdentityTransform(),
     }
-    if competition != 1:
-        augmentations.update({
-            'flipfb': ChannelsSymmetryFB(probability=probability, ordered_ch_names=ch_names, random_state=seed),
-            'fliplr': ChannelsSymmetry(probability=probability, ordered_ch_names=ch_names, random_state=seed),
-        })
     """More options:
         FTSurrogate,
         BandstopFilter,
@@ -2330,74 +2146,6 @@ def plot_thresh_to_acc_old(
     ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
     ax1.grid(None)
     return ax
-
-
-# def plot_thresh_to_acc(
-#     df,
-#     ax=None,
-#     dummy=None,
-# ):
-#     # if we only decode normals or abnormals, this will raise 
-#     #if df.pathological.nunique() == 1:
-#     #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
-#     sorted_gaps = (df['y_true'] - df['y_pred']).sort_values().to_numpy()
-#     gaps = df['y_true'] - df['y_pred']
-
-#     accs = []
-#     for thresh in sorted_gaps:
-#         y_true=df['pathological'].to_numpy(dtype=int)
-#         y_pred=(gaps > thresh).to_numpy(dtype=int)
-#         #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
-#         accs.append(
-#             balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
-#         )
-#     df = pd.DataFrame([sorted_gaps, accs, y_true]).T
-#     df.columns = ['thresh', 'acc', 'pathological']
-#     df['acc'] *= 100
-
-#     if ax is None:
-#         fig, ax = plt.subplots(1,1,figsize=(12,3))
-#     if 0 not in df.pathological.unique():
-#         c='g' 
-#     elif 1 not in df.pathological.unique():
-#         c='b'
-#     else:
-#         c='k'
-
-#     ax.plot(df['thresh'], df['acc'], c=c)#, zorder=3)  # does not make sense in mixed case
-#     ax.fill_between(df['thresh'][df['thresh'] < sorted_gaps[df.acc.argmax()]],
-#                     df['acc'][df['thresh'] < sorted_gaps[df.acc.argmax()]], 50, 
-#                     color='b', label='False', alpha=.5)
-#     ax.fill_between(df['thresh'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 
-#                     df['acc'][df['thresh'] > sorted_gaps[df.acc.argmax()]], 50,
-#                     color='r', label='True', alpha=.5)
-
-#     ax.set_ylabel('Accuracy [%]')
-#     ax.set_xlabel('Chronological Age – Decoded Age [years]')
-#     ax.legend(title='Pathological')
-
-#     xlim = max(abs(sorted_gaps)) * 1.1
-#     ax.set_xlim(-xlim, xlim)
-
-#     ax.plot([sorted_gaps[df.acc.argmax()], sorted_gaps[df.acc.argmax()]], 
-#             [ax.get_ylim()[0],  df.acc.max()], c='lightgreen', linewidth=1)
-#     ax.plot([ax.get_xlim()[0], sorted_gaps[df.acc.argmax()]], 
-#             [df.acc.max(), df.acc.max()], c='lightgreen', linewidth=1)
-# #     ax.axvline(sorted_gaps[df.acc.argmax()], c='lightgreen', linewidth=1)
-# #     ax.axhline(df.acc.max(), c='lightgreen', linewidth=1)
-#     ax.scatter(sorted_gaps[df.acc.argmax()], df.acc.max(), zorder=4, marker='*', 
-#                c='lightgreen', s=20)
-
-#     ax.text(sorted_gaps[df.acc.argmax()], ax.get_ylim()[0]-1.75, f"{sorted_gaps[df.acc.argmax()]:.2f}",
-#             ha='center', va='top', fontweight='bold')#, c='lightgreen')
-#     ax.text(ax.get_xlim()[0]-1.25, df.acc.max(), f"{df.acc.max():.2f}",
-#             ha='right', va='center', fontweight='bold')#, c='lightgreen')
-    
-#     ax.set_yticks(ax.get_yticks()[:-2])
-    
-#     if dummy is not None:
-#         ax.axhline(dummy, c='m', linewidth=1)
-#     return ax
 
 
 def create_grid(hist_max_count, max_age):
@@ -3019,7 +2767,8 @@ def _deconfound(y_true, y_pred, kind):
         raise ValueError
 
         
-def deconfound(df, detrend):
+def deconfound(df_, detrend):
+    df = df_.copy()
     if detrend is not None:
         y_true = df.y_true
         y_pred = df.y_pred
@@ -3035,7 +2784,6 @@ if __name__ == "__main__":
     # args for decoding
     parser.add_argument('--augment', type=str)
     parser.add_argument('--batch-size', type=int)
-    parser.add_argument('--condition', type=str)
     parser.add_argument('--data-path', type=str)
     parser.add_argument('--date', type=str)
     parser.add_argument('--debug', type=int)
