@@ -280,7 +280,6 @@ def decode_tueg(
     save_csv(scores, out_dir, 'train_end_scores.csv')
     
     logger.info('done.')
-    return
     
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
@@ -2264,6 +2263,7 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
 
 
 def plot_heatmaps(df, bin_size, max_age, hist_max_count):
+    # TODO: allow xlim, ylim
     assert max_age == 100
     assert max_age % bin_size == 0
     fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = create_grid(hist_max_count, max_age)
@@ -2638,18 +2638,21 @@ def _read_result(
             pred_path = os.path.join(exp_dir, 'preds', f'train_end_{subset}_preds.csv')
             preds1 = pd.read_csv(pred_path, index_col=0)
         preds1['subset'] = subset
+        this_result = preds1
         try:
             pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_not_{config.squeeze()["subset"]}_preds.csv')
             preds2 = pd.read_csv(pred_path, index_col=0)
+            preds2['subset'] = 'valid_rest'
+            this_result = pd.concat([this_result, preds2])
         except:
             try:
                 pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_rest_preds.csv')
                 preds2 = pd.read_csv(pred_path, index_col=0)
+                preds2['subset'] = 'valid_rest'
+                this_result = pd.concat([this_result, preds2])
             except:
-                raise FileNotFoundError
-        preds2['subset'] = 'valid_rest'
+                logger.warning('valid_rest could not be read')
         # TODO: add longitudinal preds
-        this_result = pd.concat([preds1, preds2])
         this_result['gap'] = this_result.y_true - this_result.y_pred
     elif result == 'train_repds':
         pred_path = os.path.join(exp_dir, 'preds', f'train_end_train_preds.csv')
