@@ -1,9 +1,12 @@
+import subprocess
+print(subprocess.check_output(["/usr/bin/nvidia-smi"]).decode())
+
 import os
 import re
 import sys
 if os.path.exists('/work/braindecode'):
     sys.path.insert(0, '/work/braindecode')
-    sys.path.insert(0, '/work/mne-python')
+    #sys.path.insert(0, '/work/mne-python')
     print('adding local code resources')
 import math
 import json
@@ -278,8 +281,7 @@ def decode_tueg(
     save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
-    
-    logger.info('done.')
+    logger.info('done training.')
     
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
@@ -1885,8 +1887,9 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
 ):
     ax0, ax1 = get_hist_perm_test_grid()
 
+    g1 = get_subject_wise_df(g1)
     ax0, t_low, t_high = plot_age_gap_hist_with_threshs(
-        g1, ax=ax0, t_low=t_low, t_high=t_high,
+        g1, ax=ax0, t_low=t_low, t_high=t_high, bin_width=bin_width,
     )
     observed, sampled = accuracy_perumtations(g1, n_repetitions)
     # overwrite 'observation' with just 1 threshold
@@ -1912,6 +1915,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
 
 def plot_age_gap_hist_with_threshs(
     g1,
+    bin_width=2,
     ax=None,
     t_low=None,
     t_high=None,
@@ -1925,7 +1929,6 @@ def plot_age_gap_hist_with_threshs(
 
     #g1['Pathological'] = g1.pathological == 1
     
-    bin_width = 2
     bins = np.concatenate([
         np.arange(0, - g1.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
         np.arange(bin_width, g1.gap.max() + bin_width, bin_width, dtype=int)
@@ -1980,7 +1983,7 @@ def plot_age_gap_hist_with_threshs(
     #ax.text(x2, y, "True", ha='left', weight='bold', c='r')
     return ax, t_low, t_high
 
-
+"""
 def plot_thresh_to_acc(
     df,
     ax=None,
@@ -2145,7 +2148,7 @@ def plot_thresh_to_acc_old(
     ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
     ax1.grid(None)
     return ax
-
+"""
 
 def create_grid(hist_max_count, max_age):
     #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
@@ -2346,12 +2349,20 @@ def plot_hist():
     pass
 
 
+def get_subject_wise_df(df_in):
+    # averages a df grouped by pathology status and subject id
+    df = df_in.copy()
+    df['gap'] = df.y_pred - df.y_true
+    df = df[['pathological', 'y_true', 'y_pred', 'subject', 'gap']].groupby(['pathological', 'subject'], as_index=False).mean()
+    return df
+
+
 def plot_age_gap_hist(
     df,
     bin_width=5,
     ax=None,
 ):
-    df['gap'] = df.y_pred - df.y_true
+    df = get_subject_wise_df(df)
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12,3))
     bins = np.concatenate([
@@ -2395,6 +2406,7 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions)
     ax0, ax1 = get_hist_perm_test_grid()
 
     plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
+    this_preds = get_subject_wise_df(this_preds)
     observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, True)
     print('observed age gap diff', observed)
     
