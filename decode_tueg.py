@@ -283,10 +283,17 @@ def decode_tueg(
     save_csv(scores, out_dir, 'train_end_scores.csv')
     logger.info('done training.')
     
+    if final_eval == 1:
+        pass
+    # TODO: compute gradients
+    
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
     # predict valid rest and longitudinal datasets
-    for ds_name in [valid_rest_name]:#, 'transition', 'non_pathological', 'pathological']:
+    ds_names = [valid_rest_name]
+    #if final_eval == 1:
+        #ds_names.extend(['transition', 'non_pathological', 'pathological'])
+    for ds_name in ds_names:
         if ds_name == valid_rest_name:
             ds = valid_rest
         else:
@@ -1626,7 +1633,10 @@ def _create_final_scores(
     target_scaler,
     data_scaler,
     n_jobs,
+    subject_wise=True,
 ):
+    if not subject_wise:
+        logger.warning('computing recording-wise results')
     logger.info(f"on {ds_name} reached")
     preds, targets = predict_ds(
         estimator,
@@ -1642,7 +1652,6 @@ def _create_final_scores(
     preds = pd.DataFrame({'y_true': targets, 'y_pred': preds})  
     preds = pd.concat([preds, ds.description], axis=1)
     # always aggregate to subject-wise score
-    subject_wise = True
     if subject_wise:
         # TODO: y_true are no ints after this operation anymore. pandas introduces floating point imprecisions...
         y_true = preds.groupby('subject')['y_true'].mean()
@@ -2260,8 +2269,8 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
     
     ax.set_ylabel(' ')
     ax.set_yticklabels([])
-    ax.text(ax.get_xlim()[0], ax.get_ylim()[1], 'Overestimated', ha='left', va='top', weight='bold')
-    ax.text(ax.get_xlim()[1], ax.get_ylim()[0], 'Underestimated', ha='right', va='bottom', weight='bold')
+    #ax.text(ax.get_xlim()[0], ax.get_ylim()[1], 'Overestimated', ha='left', va='top', weight='bold')
+    #ax.text(ax.get_xlim()[1], ax.get_ylim()[0], 'Underestimated', ha='right', va='bottom', weight='bold')
     return ax
 
 
@@ -2283,12 +2292,14 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
     ax7.legend(handles=patches, title='Pathological')
 
+    # ax0 and ax1 true age hists
     bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
     ax0.axvline(df_np.y_true.mean(), c='cyan')
     sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
     ax1.axvline(df_p.y_true.mean(), c='magenta')
 
+    # ax2 decoded age hist
     sns.histplot(data=df_np, y='y_pred', ax=ax2, color='b', kde=True, bins=bins)
     sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
     ax2.axhline(df_np.y_pred.mean(), c='cyan')
@@ -2297,13 +2308,16 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
     ax2.set_yticks(np.linspace(0, 100, 11, dtype='int'))
     ax2.legend()
     
-    sns.lineplot(x=[0, 100], y=[0, 100], ax=ax3, c='k', linewidth=1)
-    sns.scatterplot(data=df_np[['y_pred', 'y_true']].mean().to_frame().T, 
-                    x='y_true', y='y_pred', ax=ax3, c='cyan', marker='*', s=300)
-    sns.lineplot(x=[0, 100], y=[0, 100], ax=ax4, c='k', linewidth=1)
-    sns.scatterplot(data=df_p[['y_pred', 'y_true']].mean().to_frame().T, 
-                    x='y_true', y='y_pred', ax=ax4, c='magenta', marker='*', s=300)
+    # ax3 non-pathological scatterplot
+    sns.lineplot(x=[0, max_age], y=[0, max_age], ax=ax3, c='k', linewidth=1)
+    #sns.scatterplot(data=df_np[['y_pred', 'y_true']].mean().to_frame().T, 
+    #                x='y_true', y='y_pred', ax=ax3, c='cyan', marker='*', s=300)
+    # ax4 pathological scatterplot
+    sns.lineplot(x=[0, max_age], y=[0, max_age], ax=ax4, c='k', linewidth=1)
+    #sns.scatterplot(data=df_p[['y_pred', 'y_true']].mean().to_frame().T, 
+    #                x='y_true', y='y_pred', ax=ax4, c='magenta', marker='*', s=300)
 
+    # compute 2d histograms of y_pred, y_true
     Hs = []
     dfs = [df_np, df_p]
     for this_df in dfs:
@@ -2316,12 +2330,13 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
             bins=max_age//bin_size, range=[[0, max_age], [0, max_age]],
         )
         Hs.append(H)
+    # compute most extreme value for colorbar
     Hmax = np.max([H.max() for H in Hs if H is not None]).astype(int)
 
 #     fig, ax_arr = plt.subplots(1, 2, figsize=(15,6), sharex=True, sharey=True)
 #     fig.tight_layout()
     axs = [ax3, ax4]
-    axs2 = [ax0, ax1]
+#    axs2 = [ax0, ax1]
     for i, (H, this_df, cmap, cbar_ax) in enumerate(zip(Hs, dfs, ['Blues', 'Reds'], [ax5, ax6])):
         if this_df.empty:
             continue
@@ -2335,12 +2350,29 @@ def plot_heatmaps(df, bin_size, max_age, hist_max_count):
             vmax=Hmax,
             cbar_ax=cbar_ax,
         )
-        mae = mean_absolute_error(this_df.y_true, this_df.y_pred)
+#        mae = mean_absolute_error(this_df.y_true, this_df.y_pred)
         # add error to diagonal
 #         sns.lineplot(x=[0, 100-mae/bin_size], y=[mae/bin_size, 100], ax=axs[i], c='k', linewidth=1, linestyle='--')
 #         sns.lineplot(x=[mae/bin_size, 100], y=[0, 100-mae/bin_size], ax=axs[i], c='k', linewidth=1, linestyle='--')
 #         axs2[i].set_title(
 #             f'Non-pathological\n({mae:.2f} years mae)' if i == 0 else f'Pathological\n({mae:.2f} years mae)')
+
+    # compute min and max over predictions and targets and add one bin of histogram for nice axis limits
+    allow_limits = False
+    if allow_limits:
+        max_ = np.ceil(np.max([df.y_pred.max(), df.y_true.max()])).astype(int) + bin_size
+        min_ = np.ceil(np.min([df.y_pred.min(), df.y_true.min()])).astype(int) - bin_size
+        # set limits to min and max found above
+        for x in [ax0, ax1]:
+            x.set_xlim(min_, max_)
+        for x in [ax2]:
+            x.set_ylim(min_, max_)
+        for x in [ax3, ax4]:
+            x.set_xlim(min_//bin_size, max_//bin_size)
+            x.set_ylim(min_//bin_size, max_//bin_size)
+    for x in [ax3, ax4]:
+        x.text(x.get_xlim()[0], x.get_ylim()[1], 'Overestimated', ha='left', va='top', weight='bold')
+        x.text(x.get_xlim()[1], x.get_ylim()[0], 'Underestimated', ha='right', va='bottom', weight='bold')
     return ax0
 
 
