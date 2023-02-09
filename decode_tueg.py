@@ -282,7 +282,23 @@ def decode_tueg(
     
     if final_eval == 1:
         pass
-    # TODO: compute gradients
+        # compute gradients for valid and valid_rest
+        datasets = [('valid', tuabn_valid), (valid_rest_name, valid_rest)]
+        for ds_name, ds in datasets:
+            grads = compute_gradients(estimator, ds, batch_size, n_jobs)
+            freqs, info = get_freqs_and_info(ds)
+            grad_path = os.path.join(out_dir, 'grads')
+            if not os.path.exists(grad_path):
+                os.makedirs(grad_path)
+            # save grads to csv file
+            all_grads_df = []
+            for k, v in grads.items():
+                grads_df = pd.DataFrame(v, index=info.ch_names, columns=freqs)
+                pathological = 1 if k == 'pathological' else 0
+                grads_df['pathological'] = pathological
+                all_grads_df.append(grads_df)
+            all_grads_df = pd.concat(all_grads_df)
+            save_csv(all_grads_df, out_path, f'{checkpoint}_{ds_name}_grads.csv')
     
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
@@ -702,11 +718,13 @@ def get_datasets(
     # split into train / eval | train / valid
     subject_wise = True
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
+    # TODO: [('train', tuabn_train), ('valid', 'tuabn_valid')]
     tuabn_train, tuabn_valid = get_dataset_splits(
         tuabn_train, target_name, valid_set_i, final_eval=final_eval, 
         subject_wise=subject_wise, shuffle=shuffle_data_before_split, seed=seed,
     )
 
+    # TODO: handle datasets as list and apply selection to every element?
     # select normal/abnormal only
     logger.info(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                 f" ({len(tuabn_valid.datasets)}) selecting {subset}")
@@ -714,6 +732,7 @@ def get_datasets(
     tuabn_valid, valid_rest = subselect(tuabn_valid, subset)
     logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)})")
+    # TODO: valid_rest can be None after subselect normal/abnormal/mixed
     logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # TODO: add male /female subselection?
@@ -2413,8 +2432,10 @@ def plot_age_gap_hist(
     ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
     mean_non_patho_gap = non_patho_df.gap.mean()
     mean_patho_gap = patho_df.gap.mean()
-    ax.axvline(mean_non_patho_gap, c='cyan', label=f'False mean ({mean_non_patho_gap:.2f})')
-    ax.axvline(mean_patho_gap, c='magenta', label=f'True mean ({mean_patho_gap:.2f})')
+    if not non_patho_df.empty:
+        ax.axvline(mean_non_patho_gap, c='cyan', label=f'False mean ({mean_non_patho_gap:.2f})')
+    if not patho_df.empty:
+        ax.axvline(mean_patho_gap, c='magenta', label=f'True mean ({mean_patho_gap:.2f})')
 #     if mean_patho_gap > mean_non_patho_gap:
 #         ax.text(mean_non_patho_gap + (mean_patho_gap - mean_non_patho_gap)/2, ax.get_ylim()[1], 
 #                 f"{(mean_patho_gap - mean_non_patho_gap):.2f}", fontweight='bold',
@@ -2845,7 +2866,7 @@ def compute_gradients(clf, ds, batch_size, n_jobs):
     for n, d in ds.split('pathological').items():
         grads = compute_amplitude_gradients(clf.module, d, batch_size, n_jobs)
         avg_grads = grads.mean((1, 0))
-        all_grads['Non-pathological' if n == '0' else 'Pathological'] = avg_grads
+        all_grads['non_pathological' if n == '0' else 'pathological'] = avg_grads
     #if 'Non-pathological' in all_grads.keys() and 'Pathological' in all_grads.keys():
     #    all_grads['Non-pathological – Pathological'] = all_grads['Non-pathological'] - all_grads['Pathological']
     return all_grads
@@ -2855,14 +2876,18 @@ def get_freqs_and_info(ds):
     names = [ch.split(' ')[-1] for ch in ds.datasets[0].windows.info['ch_names']]
     names = [ch.replace('Z', 'z') for ch in names]
     names = [ch.replace('P', 'p') if ch in ['FP1', 'FP2'] else ch for ch in names]
-
     sfreq = ds.datasets[0].windows.info['sfreq']
     freqs = np.fft.rfftfreq(ds[0][0].shape[1], 1/sfreq)
-    
+    info = make_info(names)
+    return freqs, info
+
+
+def make_info(names):
+    sfreq = 1
     montage = mne.channels.make_standard_montage('standard_1020')
     info = mne.create_info(names, sfreq, ch_types='eeg')
     info = info.set_montage(montage)
-    return freqs, info
+    return info
 
 
 def freq_to_bin(bins, freq):
@@ -2884,8 +2909,8 @@ def add_grads_cbar(fig, ax_img):
     clb.ax.set_title('') # gradient?
 
     
-def plot_band_grads(all_band_grads, info):
-    fig, ax_arr = plt.subplots(1, 3, figsize=(10, 3))
+def plot_band_grads(all_band_grads, info, band):
+    fig, ax_arr = plt.subplots(1, len(all_band_grads), figsize=(10, 3))
     # for better comparability, compute vlim over all pathological subsets of a freq band
     vmin, vmax = np.min([v for k, v in all_band_grads.items()]), np.max([v for k, v in all_band_grads.items()])
     max_abs = np.abs([vmin, vmax]).max()
