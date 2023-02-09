@@ -50,6 +50,7 @@ from braindecode.regressor import EEGRegressor
 from braindecode.classifier import EEGClassifier
 from braindecode.training import CroppedLoss, CroppedTrialEpochScoring
 from braindecode.augmentation import *
+from braindecode.visualization import compute_amplitude_gradients
 
 
 formatter = logging.Formatter(
@@ -158,11 +159,7 @@ def decode_tueg(
         min_age,
         max_age,
         shuffle_data_before_split,
-    )
-    logger.info(f"n train recs {len(tuabn_train.description)}")
-    logger.info(f"n train subjects {tuabn_train.description.subject.nunique()}")
-    logger.info(f"n valid recs {len(tuabn_valid.description)}")
-    logger.info(f"n valid subjects {tuabn_valid.description.subject.nunique()}")
+    )  
     title = create_title(
         final_eval,
         len(tuabn_train.datasets),
@@ -457,25 +454,29 @@ def get_dataset_splits(
     tuabn_train, 
     target_name, 
     valid_set_i,
+    final_eval,
     subject_wise, 
     shuffle, 
     seed,
 ):
-    logger.info(f"validation run, removing eval from dataset with {len(tuabn_train.description)} recordings")
     # use fixed seed here and don't shuffle to always have the same train eval split
-    tuabn_train, tuabn_eval = _get_train_eval_datasets(
+    tuabn_train, tuabn_valid = _get_train_eval_datasets(
         tuabn_train, target_name, subject_wise, shuffle=False, seed=20230111)
-    logger.debug(f'after train eval {len(tuabn_train.datasets)}')
-    shuffle = True if target_name in ['age', 'age_clf'] else False
-    # use input seed here and allow shuffling to enable different, but reproducible splits
-    tuabn_train, tuabn_valid = _get_train_valid_datasets(
-        tuabn_train, target_name, subject_wise, valid_set_i, shuffle, seed)
-    logger.debug(f'after train valid {len(tuabn_train.datasets)}')
+    logger.debug(f'after train eval {len(tuabn_train.datasets)}, {len(tuabn_valid.datasets)}')
+    if final_eval == 0:
+        logger.info(f"validation run")
+        shuffle = True if target_name in ['age', 'age_clf'] else False
+        # use input seed here and allow shuffling to enable different, but reproducible splits
+        tuabn_train, tuabn_valid = _get_train_valid_datasets(
+            tuabn_train, target_name, subject_wise, valid_set_i, shuffle, seed)
+        logger.debug(f'after train valid {len(tuabn_train.datasets)}, {len(tuabn_valid.datasets)}')
     intersection = np.intersect1d(
         tuabn_valid.description.subject, tuabn_train.description.subject)
     if subject_wise and intersection.any():
-        raise RuntimeError(f"subject leakage train / valid detected {intersection}")
-    return tuabn_eval, tuabn_train, tuabn_valid
+        raise RuntimeError(f"subject leakage detected {intersection}")
+    #logger.info(f"train: n_recs {len(tuabn_train.description)}, n_subjects {tuabn_train.description.subject.nunique()}")
+    #logger.info(f"valid: n_recs {len(tuabn_valid.description)}, n_subjects {tuabn_valid.description.subject.nunique()}")
+    return tuabn_train, tuabn_valid
 
 
 def _get_train_eval_datasets(
@@ -701,14 +702,10 @@ def get_datasets(
     # split into train / eval | train / valid
     subject_wise = True
     logger.debug(f"splitting dataset with {len(tuabn_train.description)} recordings")
-    tuabn_eval, tuabn_train, tuabn_valid = get_dataset_splits(
-            tuabn_train, target_name, valid_set_i, subject_wise=subject_wise, 
-        shuffle=shuffle_data_before_split, seed=seed,
+    tuabn_train, tuabn_valid = get_dataset_splits(
+        tuabn_train, target_name, valid_set_i, final_eval=final_eval, 
+        subject_wise=subject_wise, shuffle=shuffle_data_before_split, seed=seed,
     )
-    logger.debug(f'after split {len(tuabn_train.datasets)}')
-    if final_eval == 1:
-        tuabn_valid = tuabn_eval
-    tuabn_eval = None
 
     # select normal/abnormal only
     logger.info(f"from train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
@@ -720,6 +717,15 @@ def get_datasets(
     logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # TODO: add male /female subselection?
+    sex = -1
+    if sex != -1:
+        logger.info(f"selecting recordings of {sex} subjects")
+        tuabn_train = subselect(dataset=tuabn_train, subset=sex)
+        tuabn_valid = subselect(dataset=tuabn_valid, subset=sex)
+        valid_rest = subselect(dataset=valid_rest, subset=sex)
+        logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
+                     f" ({len(tuabn_valid.datasets)})")
+        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # select based on age
     if min_age != -1 or max_age != -1:
@@ -2177,20 +2183,20 @@ def create_grid(hist_max_count, max_age):
     facecolor = 'white'
     ax0.set_title('')
     ax0.set_xlim(0, max_age)
-    ax0.set_ylim([0, hist_max_count])
+#    ax0.set_ylim([0, hist_max_count])
     ax0.set_xticklabels([])
     ax0.set_xlabel(' ')
     ax0.set_facecolor(facecolor)
     ax1.set_title('')
     ax1.set_xlim(0, max_age)
-    ax1.set_ylim([0, hist_max_count])
+#    ax1.set_ylim([0, hist_max_count])
     ax1.set_xticklabels([])
     ax1.set_xlabel(' ')
     ax1.set_yticklabels([])
     ax1.set_ylabel(' ')
     ax1.set_facecolor(facecolor)
     ax2.set_ylim(0, max_age)
-    ax2.set_xlim([hist_max_count, 0])
+#    ax2.set_xlim([hist_max_count, 0])
     ax2.set_facecolor(facecolor)
     ax2.set_ylabel('Decoded Age [years]')
     ax3.set_ylim(0, max_age)
@@ -2274,9 +2280,9 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
     return ax
 
 
-def plot_heatmaps(df, bin_size, max_age, hist_max_count):
-    # TODO: allow xlim, ylim
-    assert max_age == 100
+def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
+    hist_max_count = None
+    max_age = max(100, df.y_true.max())
     assert max_age % bin_size == 0
     fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = create_grid(hist_max_count, max_age)
     
@@ -2713,6 +2719,15 @@ def _read_result(
     return this_result
 
 
+def iter_exp_dir(exp_dir, exp_date):
+    seeds = sorted(os.listdir(os.path.join(exp_dir, exp_date)))
+    for seed in seeds:
+        runs = sorted(os.listdir(os.path.join(exp_dir, exp_date, seed)))
+        for run_i, run in enumerate(runs):
+            exp_path = os.path.join(exp_date, seed, run)
+            yield exp_path
+
+
 # TODO: add std error bar around mean?
 def plot_recording_interval_hist(df, clip_value, c, ax=None):
     all_day_diffs = []
@@ -2823,6 +2838,73 @@ def deconfound(df_, detrend):
         df['y_pred'] = y_pred
         df['gap'] = y_pred-y_true
     return df
+
+
+def compute_gradients(clf, ds, batch_size, n_jobs):
+    all_grads = {}
+    for n, d in ds.split('pathological').items():
+        grads = compute_amplitude_gradients(clf.module, d, batch_size, n_jobs)
+        avg_grads = grads.mean((1, 0))
+        all_grads['Non-pathological' if n == '0' else 'Pathological'] = avg_grads
+    #if 'Non-pathological' in all_grads.keys() and 'Pathological' in all_grads.keys():
+    #    all_grads['Non-pathological – Pathological'] = all_grads['Non-pathological'] - all_grads['Pathological']
+    return all_grads
+
+
+def get_freqs_and_info(ds):
+    names = [ch.split(' ')[-1] for ch in ds.datasets[0].windows.info['ch_names']]
+    names = [ch.replace('Z', 'z') for ch in names]
+    names = [ch.replace('P', 'p') if ch in ['FP1', 'FP2'] else ch for ch in names]
+
+    sfreq = ds.datasets[0].windows.info['sfreq']
+    freqs = np.fft.rfftfreq(ds[0][0].shape[1], 1/sfreq)
+    
+    montage = mne.channels.make_standard_montage('standard_1020')
+    info = mne.create_info(names, sfreq, ch_types='eeg')
+    info = info.set_montage(montage)
+    return freqs, info
+
+
+def freq_to_bin(bins, freq):
+    return np.abs(bins - freq).argmin()
+
+
+def freqs_to_bin(bins, freqs):
+    return [np.abs(bins - freq).argmin() for freq in freqs]
+
+
+def add_grads_cbar(fig, ax_img):
+    # manually add colorbar
+    ax_x_start = 0.95
+    ax_x_width = 0.04
+    ax_y_start = 0.1
+    ax_y_height = 0.9
+    cbar_ax = fig.add_axes([ax_x_start, ax_y_start, ax_x_width, ax_y_height])
+    clb = fig.colorbar(ax_img, cax=cbar_ax)
+    clb.ax.set_title('') # gradient?
+
+    
+def plot_band_grads(all_band_grads, info):
+    fig, ax_arr = plt.subplots(1, 3, figsize=(10, 3))
+    # for better comparability, compute vlim over all pathological subsets of a freq band
+    vmin, vmax = np.min([v for k, v in all_band_grads.items()]), np.max([v for k, v in all_band_grads.items()])
+    max_abs = np.abs([vmin, vmax]).max()
+    for subset_i, (subset, band_grads) in enumerate(all_band_grads.items()):
+        ax_img, contours = mne.viz.plot_topomap(
+            band_grads, 
+            info,
+            size=3,
+            names=info.ch_names,
+            show=False,
+            axes=ax_arr[subset_i],
+            vlim=(-max_abs, max_abs),
+        )
+        ax_img.axes.set_title(f'{subset}\n')
+        if subset_i == 0:
+            ax_img.axes.set_ylabel('-'.join([str(i) for i in band])+' Hz\n')
+    # move one in for sanity check. one band, all subsets -> same cbar vlim
+    add_grads_cbar(fig, ax_img)
+    return fig
 
 
 if __name__ == "__main__":
