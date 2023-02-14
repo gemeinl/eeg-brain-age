@@ -94,6 +94,7 @@ def decode_tueg(
     squash_outs,
     standardize_data,
     standardize_targets,
+    subsample,
     subset,
     target_name,
     tmax,
@@ -108,10 +109,7 @@ def decode_tueg(
     TODO: add docstring
     """
     out_dir = os.path.join(out_dir, date, str(seed), str(valid_set_i))
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-    else:
-        raise RuntimeError(f'Directory already exists {out_dir}')
+    makedir(out_dir, 'raise')
     add_file_logger(
         logger=logger,
         out_dir=out_dir,
@@ -127,7 +125,7 @@ def decode_tueg(
         batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
         max_age, min_age, model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, 
         out_dir, preload, seed, shuffle_data_before_split, squash_outs, 
-        standardize_data, standardize_targets, subset, target_name, tmax, tmin, 
+        standardize_data, standardize_targets, subsample, subset, target_name, tmax, tmin, 
         valid_set_i, window_size_samples, augment, loss, logger,
     )
 
@@ -159,6 +157,7 @@ def decode_tueg(
         min_age,
         max_age,
         shuffle_data_before_split,
+        subsample,
     )  
     title = create_title(
         final_eval,
@@ -273,62 +272,51 @@ def decode_tueg(
         n_jobs,
     )
     pred_path = os.path.join(out_dir, 'preds')
-    if not os.path.exists(pred_path):
-        os.makedirs(pred_path)
+    makedir(pred_path)
     save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
-    logger.info('done training.')
     
-    if final_eval == 1:
-        pass
-        # compute gradients for valid and valid_rest
-        datasets = [('valid', tuabn_valid), (valid_rest_name, valid_rest)]
-        for ds_name, ds in datasets:
-            grads = compute_gradients(estimator, ds, batch_size, n_jobs)
-            freqs, info = get_freqs_and_info(ds)
-            grad_path = os.path.join(out_dir, 'grads')
-            if not os.path.exists(grad_path):
-                os.makedirs(grad_path)
-            # save grads to csv file
-            all_grads_df = []
-            for k, v in grads.items():
-                grads_df = pd.DataFrame(v, index=info.ch_names, columns=freqs)
-                pathological = 1 if k == 'pathological' else 0
-                grads_df['pathological'] = pathological
-                all_grads_df.append(grads_df)
-            all_grads_df = pd.concat(all_grads_df)
-            save_csv(all_grads_df, out_path, f'{checkpoint}_{ds_name}_grads.csv')
-    
+    # compute gradients for valid / eval and save to file
+    logger.info('computing gradients')
+    grads = compute_gradients(estimator, tuabn_valid, batch_size, n_jobs)
+    grad_path = os.path.join(out_dir, 'grads')
+    makedir(grad_path)
+    save_csv(grads, grad_path, f'train_end_{test_name(final_eval)}_grads.csv')
+
     # TODO: rename valid_rest to smth meaningfull
     # TODO: move stuff below into function
-    # predict valid rest and longitudinal datasets
+    # TODO: predidct longitudinal datasets?
+    # predict valid rest 
     ds_names = [valid_rest_name]
-    #if final_eval == 1:
-        #ds_names.extend(['transition', 'non_pathological', 'pathological'])
+    if final_eval == 1:
+        ds_names.extend(['transition', 'non_pathological', 'pathological'])
     for ds_name in ds_names:
+        logger.debug(f"dataset {ds_name} n={len(ds.datasets)}")
         if ds_name == valid_rest_name:
             ds = valid_rest
+            logger.debug('preprocessing')
+            ds = preprocess(
+                ds, 
+                preprocessors=get_preprocessors(tmin, tmax), 
+                n_jobs=n_jobs,
+            )
+            logger.debug('windowing')
+            ds = _create_windows(
+                ds,
+                window_size_samples,
+                n_jobs, 
+                preload,
+                n_preds_per_input,
+                mapping,
+            )
         else:
-            ds = get_longitudinal_ds(ds_name, (min_age, max_age))
+            #ds = get_longitudinal_ds(ds_name, (min_age, max_age))
+            # get preprocessed and windowed longitudinal dataset
+            with open(f'/home/jovyan/longitudinal/{ds_name}_pre_win.pkl', 'rb') as f:
+                ds = pickle.load(f)
         if ds is None:
             continue
-        logger.debug(f"dataset {ds_name} n={len(ds.datasets)}")
-        logger.debug('preprocessing')
-        ds = preprocess(
-            ds, 
-            preprocessors=get_preprocessors(tmin, tmax), 
-            n_jobs=n_jobs,
-        )
-        logger.debug('windowing')
-        ds = _create_windows(
-            ds,
-            window_size_samples,
-            n_jobs, 
-            preload,
-            n_preds_per_input,
-            mapping,
-        )
         logger.debug('predicting')
         ds_preds, ds_score = _create_final_scores(
             estimator,
@@ -375,6 +363,7 @@ def check_input_args(
     squash_outs,
     standardize_data,
     standardize_targets, 
+    subsample,
     subset,
     target_name,
     tmax,
@@ -431,6 +420,8 @@ def check_input_args(
         assert isinstance(max_age, int)
     if min_age != -1:
         assert isinstance(min_age, int)
+    if subsample not in ['0', 'match', 'uniform']:
+        raise ValueError(f'Unknown subsampling type {subsample}')
 
 
 def test_name(final_eval):
@@ -684,6 +675,7 @@ def get_datasets(
     min_age,
     max_age,
     shuffle_data_before_split,
+    subsample,
 ):
     logger.debug("indexing files")
     tuabn_train = TUHAbnormal(
@@ -700,8 +692,7 @@ def get_datasets(
         tuabn_train = reject_derivating_ages(tuabn_train)
     logger.debug(f'after exclude {len(tuabn_train.datasets)}')
 
-    subsample = -1
-    if subsample != -1:
+    if subsample != '0':
         logger.info(f'subsampling age distributions for pathological and non-pathological recordings ({subsample})')
         d = tuabn_train.description
         logger.debug(f'there are {d.pathological.sum()} patho and {len(d)-d.pathological.sum()} non-patho recordings in total')
@@ -733,7 +724,8 @@ def get_datasets(
     logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                  f" ({len(tuabn_valid.datasets)})")
     # TODO: valid_rest can be None after subselect normal/abnormal/mixed
-    logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
+    if valid_rest is not None:
+        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # TODO: add male /female subselection?
     sex = -1
@@ -741,21 +733,25 @@ def get_datasets(
         logger.info(f"selecting recordings of {sex} subjects")
         tuabn_train = subselect(dataset=tuabn_train, subset=sex)
         tuabn_valid = subselect(dataset=tuabn_valid, subset=sex)
-        valid_rest = subselect(dataset=valid_rest, subset=sex)
+        if valid_rest is not None:
+            valid_rest = subselect(dataset=valid_rest, subset=sex)
         logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                      f" ({len(tuabn_valid.datasets)})")
-        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
+        if valid_rest is not None:
+            logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
 
     # select based on age
     if min_age != -1 or max_age != -1:
         logger.info(f"removing recordings of underage subjects")
         tuabn_train = subselect(dataset=tuabn_train, subset=(min_age, max_age))
         tuabn_valid = subselect(dataset=tuabn_valid, subset=(min_age, max_age))
-        valid_rest = subselect(dataset=valid_rest, subset=(min_age, max_age))
+        if valid_rest is not None:
+            valid_rest = subselect(dataset=valid_rest, subset=(min_age, max_age))
         logger.debug(f"selected train ({len(tuabn_train.datasets)}) and {test_name(final_eval)}"
                      f" ({len(tuabn_valid.datasets)})")
-        logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
-    valid_rest_name = f'valid_not_{subset}'
+        if valid_rest is not None:
+            logger.debug(f"valid_rest (aka not {subset}) has {len(valid_rest.datasets)}")
+    valid_rest_name = f'{test_name(final_eval)}_not_{subset}'
 
     # reduce number of train recordings
     if n_train_recordings != -1:
@@ -1764,15 +1760,11 @@ def _predict_ds(
     return preds, targets
 
 
-# TODO: compute longitudinal statistics on session level as multiple recs in one session could bias average time
+# TODO: compute longitudinal statistics on session level as multiple recs in one session could bias average time?
 def get_longitudinal_ds(kind, subset):
-    try:
-        ds_path = f'/work/longitudinal/{kind}.pkl'
-        with open(ds_path, 'rb') as f:
-            ds = pickle.load(f)
-    except:
+    for base_dir in ['/work/', '/home/jovyan/']:
+        ds_path = os.path.join(base_dir, 'longitudinal', f'{kind}_pre_win.pkl')
         try:
-            ds_path = f'/home/jovyan/longitudinal/{kind}.pkl'
             with open(ds_path, 'rb') as f:
                 ds = pickle.load(f)
         except:
@@ -2017,172 +2009,6 @@ def plot_age_gap_hist_with_threshs(
     #ax.text(x2, y, "True", ha='left', weight='bold', c='r')
     return ax, t_low, t_high
 
-"""
-def plot_thresh_to_acc(
-    df,
-    ax=None,
-):
-    df['gap'] = df.y_pred - df.y_true
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
-    sorted_gaps = df['gap'].sort_values().to_numpy()
-    gaps = df['gap']
-    # fix legend
-    df['Pathological'] = df.pathological == 1
-
-    accs = []
-    for i in range(1, len(sorted_gaps)):
-        for j in range(i):
-            thresh_high = sorted_gaps[i]
-            thresh_low = sorted_gaps[j]
-            y_true=df['pathological'].to_numpy(dtype=int)
-            y_pred=((gaps > thresh_high) | (gaps < thresh_low)).to_numpy(dtype=int)
-            #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
-            accs.append(
-                (i, j, balanced_accuracy_score(y_true=y_true, y_pred=y_pred))
-            )
-        print(i/len(sorted_gaps))
-    print("ij done")
-    thresh_df = pd.DataFrame(accs, columns=['i', 'j', 'acc'])
-    i, j, acc = thresh_df.iloc[thresh_df.acc.argmax()]
-    t_high, t_low = sorted_gaps[int(i)], sorted_gaps[int(j)]
-    t_low, t_high, acc * 100
-
-    bin_width = 2
-    bins = np.concatenate([
-        np.arange(0, - df.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
-        np.arange(bin_width, df.gap.max() + bin_width, bin_width, dtype=int)
-    ])
-    bins
-
-    ax = sns.histplot(data=df, x='gap', hue='Pathological', palette=['b', 'r'], ax=ax, 
-                      bins=bins)
-    ax.set_xlabel('Decoded Age – Chronological Age [years]')
-    #ax.axvline(t_high, c='lightgreen')
-    #ax.axvline(t_low, c='lightgreen')
-    ax.axvline(df[df['pathological'] == True]['gap'].mean(), c='magenta')
-    ax.axvline(df[df['pathological'] == False]['gap'].mean(), c='cyan')
-    max_abs_v = gaps.abs().max()*1.1
-    ax.set_xlim(-max_abs_v, max_abs_v)
-
-    ax.axvspan(
-        t_high, ax.get_xlim()[1],
-        facecolor='orange', alpha=.1, zorder=-100,
-    )
-    ax.axvspan(
-        ax.get_xlim()[0], t_low, 
-        facecolor='orange', alpha=.1, zorder=-100,
-    )
-    ax.axvspan(
-        t_low, t_high,
-        facecolor='teal', alpha=.1, zorder=-100,
-    )
-
-    # in the center of sections add text what it means
-    x1 = t_low + (ax.get_xlim()[0] - t_low) / 2
-    x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
-    x3 = t_low + (t_high - t_low) / 2
-    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
-    ax.text(x1, y, "True", ha='right', weight='bold', c='r')
-    ax.text(x3, y, "False", ha='center', weight='bold', c='b')
-    ax.text(x2, y, "True", ha='left', weight='bold', c='r')  
-    return ax
-
-
-# TODO: accept a thresh as input (valid thresh for eval preds)
-def plot_thresh_to_acc_old(
-    df,
-    ax=None,
-):
-    df['gap'] = df.y_pred - df.y_true
-    # if we only decode normals or abnormals, this will raise 
-    #if df.pathological.nunique() == 1:
-    #    warnings.filterwarnings("ignore", message="y_pred contains classes not")
-    sorted_gaps = df['gap'].sort_values().to_numpy()
-    gaps = df['gap']
-
-    accs = []
-    for thresh in sorted_gaps:
-        y_true=df['pathological'].to_numpy(dtype=int)
-        y_pred=(gaps > thresh).to_numpy(dtype=int)
-        #logger.debug(f"second: y_pred {np.unique(y_pred)}, y_true {np.unique(y_true)}")
-        accs.append(
-            balanced_accuracy_score(y_true=y_true, y_pred=y_pred)
-        )
-    gap_df = pd.DataFrame([sorted_gaps, accs, y_true]).T
-    gap_df.columns = ['thresh', 'acc', 'pathological']
-    gap_df['acc'] *= 100
-
-    if ax is None:
-        fig, ax = plt.subplots(1,1,figsize=(12,3))
-
-    # combine age gap hist with thresh to acc curve by creating a twin axis
-    ax = plot_age_gap_hist(df, bin_width=1, ax=ax)
-    ax.legend(title='Pathological', loc='upper left')
-    # ax is thresh curve, ax1 is histogram
-    ax1 = ax.twinx()
-
-    df = gap_df
-    if 0 not in df.pathological.unique():
-        c='g' 
-    elif 1 not in df.pathological.unique():
-        c='b'
-    else:
-        c='k'
-
-    ax1.plot(df['thresh'], df['acc'], c='lightgreen', label='Thresholds')#, zorder=3)  # does not make sense in mixed case
-
-    ax1.set_ylabel('Accuracy [%]')
-    ax.set_xlabel('Decoded Age – Chronological Age [years]')
-#     ax.legend(title='Pathological', loc='lower left')
-
-    xlim = max(abs(sorted_gaps)) * 1.1
-    ax1.set_xlim(-xlim, xlim)
-
-    ax1.scatter(
-        sorted_gaps[(df.acc - 50).abs().argmax()], 
-        df.acc[(df.acc - 50).abs().argmax()], 
-        zorder=4, marker='*',  c='orange', s=50,
-#         label=f'Best ({sorted_gaps[df.acc.argmax()]:.2f} years, {df.acc.max():.2f} %)'
-        label=f'Best ({sorted_gaps[(df.acc - 50).abs().argmax()]:.2f} , {df.acc[(df.acc - 50).abs().argmax()]:.2f})'
-    )
-    ax1.legend(loc='upper right')
-    
-#     # color the background
-#     ax1.set_facecolor('white')
-#     ax.set_facecolor('white')
-    ylim = ax1.get_ylim()
-    ax1.axhspan(
-        float(ax1.get_yticks()[0]), float(ax1.get_yticks()[-1]), xmax=1, 
-        xmin=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
-        facecolor='teal', alpha=.1, zorder=-100,
-    )
-    ax1.axhspan(
-        float(ax1.get_yticks()[0]), float(ax1.get_yticks()[-1]), xmin=0, 
-        xmax=.5 + sorted_gaps[(df.acc - 50).abs().argmax()] / (ax.get_xlim()[1]*2),
-        facecolor='orange', alpha=.1, zorder=-100,
-    )
-    ax1.set_ylim(ylim)
-    
-    # in the center of left and right half, add text what it means
-    x1 = ax1.get_xlim()[0] / 2
-    x2 = ax1.get_xlim()[1] / 2
-    y = ax1.get_ylim()[0] + np.diff(ax1.get_ylim())/2
-    ax1.text(x1, y, "Predict Pathological", ha='right')
-    ax1.text(x2, y, "Predict Non-Pathological", ha='left')
-    
-    ax.set_title('Brain Age Gap Pathology Proxy')
-    ax1.set_title('')
-    
-    # manually force last ytick to show (as multiple of 10). 78.75 did not create a 80 ticklabel, s.t.
-    # labels in twin axis did not match
-    ax.set_ylim((ax.get_ylim()[0], int(math.ceil(ax.get_ylim()[1] / 10.0)) * 10))
-    # https://stackoverflow.com/questions/26752464/how-do-i-align-gridlines-for-two-y-axis-scales-using-matplotlib
-    # order matters. do this after data was plotted to this axis
-    ax1.set_yticks(np.linspace(ax1.get_yticks()[0], ax1.get_yticks()[-1], len(ax.get_yticks())))
-    ax1.grid(None)
-    return ax
-"""
 
 def create_grid(hist_max_count, max_age):
     #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
@@ -2649,6 +2475,14 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     return ax_arr
 
 
+def makedir(out_path, existent='ignore'):
+    if os.path.exists(out_path):
+        if existent == 'raise':
+            raise RuntimeError(f'Directory already exists {out_path}')
+    else:
+        os.makedirs(out_path)
+
+
 def save_fig(
     fig,
     out_dir, 
@@ -2656,8 +2490,7 @@ def save_fig(
 ):
     for file_type in ['pdf', 'png', 'jpg']:
         out_path = os.path.join(out_dir, 'plots', f'{file_type}')
-        if not os.path.exists(out_path):
-            os.makedirs(out_path)
+        makedir(out_path)
         fig.savefig(
             os.path.join(out_path, f'{title}.{file_type}'),
             bbox_inches='tight',
@@ -2861,15 +2694,18 @@ def deconfound(df_, detrend):
     return df
 
 
-def compute_gradients(clf, ds, batch_size, n_jobs):
-    all_grads = {}
-    for n, d in ds.split('pathological').items():
-        grads = compute_amplitude_gradients(clf.module, d, batch_size, n_jobs)
-        avg_grads = grads.mean((1, 0))
-        all_grads['non_pathological' if n == '0' else 'pathological'] = avg_grads
-    #if 'Non-pathological' in all_grads.keys() and 'Pathological' in all_grads.keys():
-    #    all_grads['Non-pathological – Pathological'] = all_grads['Non-pathological'] - all_grads['Pathological']
-    return all_grads
+def compute_gradients(estimator, ds, batch_size, n_jobs):
+    split_key = 'pathological'
+    all_grads_df = []
+    for pathological, d in ds.split(split_key).items():
+        grads = compute_amplitude_gradients(estimator.module, d, batch_size, n_jobs)
+        grads = grads.mean((1, 0))
+        freqs, info = get_freqs_and_info(d)
+        grads_df = pd.DataFrame(grads, index=info.ch_names, columns=freqs)
+        grads_df[split_key] = pathological
+        all_grads_df.append(grads_df)
+    all_grads_df = pd.concat(all_grads_df)
+    return all_grads_df
 
 
 def get_freqs_and_info(ds):
@@ -2959,6 +2795,7 @@ if __name__ == "__main__":
     parser.add_argument('--squash-outs', type=int)
     parser.add_argument('--standardize-data', type=int)
     parser.add_argument('--standardize-targets', type=int)
+    parser.add_argument('--subsample', type=str)
     parser.add_argument('--subset', type=str)
     parser.add_argument('--target-name', type=str)
     parser.add_argument('--tmin', type=int)
