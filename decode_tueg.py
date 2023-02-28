@@ -249,6 +249,10 @@ def decode_tueg(
         len(tuabn_train),
         batch_size,
     )
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    #with open('/home/jovyan/eval.pkl', 'wb') as f:
+    #    pickle.dump(tuabn_valid, f)
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     logger.info(title)
     logger.info(f'starting training')
     estimator.fit(tuabn_train, y=None)
@@ -261,6 +265,7 @@ def decode_tueg(
         pickle.dump(tuabn_train.transform[0], f)
     with open(os.path.join(out_dir, 'target_scaler.pkl'), 'wb') as f:
         pickle.dump(tuabn_train.target_transform, f)
+    logger.info(f'creating final scores')
     train_preds, valid_preds, scores = create_final_scores(
         estimator,
         tuabn_train,
@@ -270,15 +275,17 @@ def decode_tueg(
         tuabn_train.target_transform,
         tuabn_train.transform[0],
         n_jobs,
+        mem_efficient=target_name in ['age_clf'],
     )
     pred_path = os.path.join(out_dir, 'preds')
     makedir(pred_path)
     save_csv(train_preds, pred_path, 'train_end_train_preds.csv')
     save_csv(valid_preds, pred_path, f'train_end_{test_name(final_eval)}_preds.csv')
     save_csv(scores, out_dir, 'train_end_scores.csv')
-    
+
     # compute gradients for valid / eval and save to file
     logger.info('computing gradients')
+    # TODO: do we need valid rest gradients? yes
     grads = compute_gradients(estimator, tuabn_valid, batch_size, n_jobs)
     grad_path = os.path.join(out_dir, 'grads')
     makedir(grad_path)
@@ -288,12 +295,16 @@ def decode_tueg(
     # TODO: move stuff below into function
     # TODO: predidct longitudinal datasets?
     # predict valid rest 
+    logger.info('processing valid_rest / longitudinal')
     ds_names = [valid_rest_name]
     if final_eval == 1:
         ds_names.extend(['transition', 'non_pathological', 'pathological'])
     for ds_name in ds_names:
-        logger.debug(f"dataset {ds_name} n={len(ds.datasets)}")
+        logger.debug(f"dataset {ds_name}")
         if ds_name == valid_rest_name:
+            if subset in ['mixed']:
+                # there is no rest dataset since subset is mixed
+                continue
             ds = valid_rest
             logger.debug('preprocessing')
             ds = preprocess(
@@ -310,11 +321,62 @@ def decode_tueg(
                 n_preds_per_input,
                 mapping,
             )
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            #with open(f'/home/jovyan/{valid_rest_name}.pkl', 'wb') as f:
+            #    pickle.dump(ds, f)
+            #1/0
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         else:
+            ds = get_longitudinal_ds(ds_name, (min_age, max_age))
+        if ds is None:
+            logger.warning(f"reading of {ds_name} failed")
+            continue
+        logger.debug('predicting')
+        ds_preds, ds_score = _create_final_scores(
+            estimator,
+            ds,
+            ds_name,
+            target_name,
+            tuabn_train.target_transform,
+            tuabn_train.transform[0],
+            n_jobs,
+            mem_efficient=ds_name in ['pathological'] or target_name in ['age_clf'],
+        )
+        save_csv(ds_preds, pred_path, f'train_end_{ds_name}_preds.csv')
+        scores = pd.concat([scores, ds_score], axis=1)
+        save_csv(scores, out_dir, 'train_end_scores.csv')
+        if ds_name == valid_rest_name:
+            grads = compute_gradients(estimator, valid_rest, batch_size, n_jobs)
+            save_csv(grads, grad_path, f'train_end_{valid_rest_name}_grads.csv')
+    logger.info('done.')
+    
+"""
+def predict_additional_datasets(ds_names, valid_rest, tmin, tmax, n_jobs, window_size_samples, preload, n_preds_per_input, mapping, estimator, target_name, target_transform, transform, pred_path, scores, out_dir):
+    for ds_name in ds_names:
+        logger.debug(f"dataset {ds_name}")
+        if ds_name in ['transition', 'non_pathological', 'pathological']:
             #ds = get_longitudinal_ds(ds_name, (min_age, max_age))
             # get preprocessed and windowed longitudinal dataset
             with open(f'/home/jovyan/longitudinal/{ds_name}_pre_win.pkl', 'rb') as f:
                 ds = pickle.load(f)
+        else:
+            ds = valid_rest
+            logger.debug('preprocessing')
+            ds = preprocess(
+                ds, 
+                preprocessors=get_preprocessors(tmin, tmax), 
+                n_jobs=n_jobs,
+            )
+            logger.debug('windowing')
+            ds = _create_windows(
+                ds,
+                window_size_samples,
+                n_jobs, 
+                preload,
+                n_preds_per_input,
+                mapping,
+            )
+
         if ds is None:
             continue
         logger.debug('predicting')
@@ -330,8 +392,7 @@ def decode_tueg(
         save_csv(ds_preds, pred_path, f'train_end_{ds_name}_preds.csv')
         scores = pd.concat([scores, ds_score], axis=1)
         save_csv(scores, out_dir, 'train_end_scores.csv')
-    logger.info('done.')
-
+"""
 
 def add_file_logger(
     logger, 
@@ -1623,6 +1684,7 @@ def create_final_scores(
     target_scaler,
     data_scaler,
     n_jobs,
+    mem_efficient,
 ):
     train_preds, train_score = _create_final_scores(
         estimator,
@@ -1632,6 +1694,7 @@ def create_final_scores(
         target_scaler,
         data_scaler,
         n_jobs,
+        mem_efficient=mem_efficient,
     )
     valid_preds, valid_score = _create_final_scores(
         estimator,
@@ -1641,6 +1704,7 @@ def create_final_scores(
         target_scaler,
         data_scaler,
         n_jobs,
+        mem_efficient=mem_efficient,
     )
     scores = pd.concat([train_score, valid_score], axis=1)
     return train_preds, valid_preds, scores
@@ -1655,9 +1719,15 @@ def _create_final_scores(
     data_scaler,
     n_jobs,
     subject_wise=True,
+    mem_efficient=False,
 ):
     if not subject_wise:
         logger.warning('computing recording-wise results')
+    # TODO: alternatively could do 
+    # mem_efficient = True if target_name == 'age_clf' or ds_name == 'pathological'
+    #if target_name in ['age_clf'] and not mem_efficient:
+        #mem_efficient = True
+        #logger.warning('age_clf very data hungry, switching to memory efficient but slower computation')
     logger.info(f"on {ds_name} reached")
     preds, targets = predict_ds(
         estimator,
@@ -1666,7 +1736,7 @@ def _create_final_scores(
         target_scaler,
         data_scaler, 
         n_jobs,
-        mem_efficient=True if target_name in ['age_clf'] else False,
+        mem_efficient=mem_efficient,
         trialwise=True,
         average_time_axis=True,
     )
@@ -1675,6 +1745,7 @@ def _create_final_scores(
     # always aggregate to subject-wise score
     if subject_wise:
         # TODO: y_true are no ints after this operation anymore. pandas introduces floating point imprecisions...
+        # TODO: groupby subject not sufficient for longitudinal datasets. add pathology status!
         y_true = preds.groupby('subject')['y_true'].mean()
         y_pred = preds.groupby('subject')['y_pred'].mean()
         if target_name == 'age':
@@ -1718,12 +1789,15 @@ def predict_ds(
     ds.target_transform = target_scaler
     ds.transform = data_scaler
     if mem_efficient:
+        # TODO: why is this n_jobs and not batch_size?
         splits = generate_splits(len(ds.datasets), n_jobs)
         splits = {i: ds.split(ids)['0'] for i, ids in splits.items()}
     else:
         splits = {'0': ds}
     all_preds, all_targets = [], []
-    for d_i, d in splits.items():
+    for i, (d_i, d) in enumerate(splits.items()):
+        if i % 100 == 0:
+            logger.debug(f'split {i}/{len(splits)}')
         preds, targets = _predict_ds(
             clf,
             d,
@@ -1769,6 +1843,7 @@ def get_longitudinal_ds(kind, subset):
                 ds = pickle.load(f)
         except:
             raise RuntimeError
+    # only allow subselection of male / female or based on age
     if subset not in ['normal', 'abnormal', 'mixed']:
         ds = subselect(ds, subset)
     return ds
@@ -2063,7 +2138,7 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
     # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
 #     cmap_ = LinearSegmentedColormap.from_list('', ['white', *getattr(plt.cm, cmap)(np.arange(255))])
     # make discrete colorbar
-    colors = ['white'] + [getattr(plt.cm, cmap)(i) for i in np.linspace(0, 255, vmax-1, dtype=int)]
+    colors = ['white'] + [getattr(plt.cm, cmap)(i) for i in np.linspace(255//vmax, 255, num=vmax-1, dtype=int)]
     cmap_ = LinearSegmentedColormap.from_list('discrete_reds', colors, N=vmax)
 
     if ax is None:
@@ -2127,8 +2202,8 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
 
 def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     hist_max_count = None
-    max_age = max(100, df.y_true.max())
-    assert max_age % bin_size == 0
+    max_age = max(100, int(df.y_true.max()))
+    #assert max_age % bin_size == 0, f'{max_age}, {bin_size}'
     fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = create_grid(hist_max_count, max_age)
     
     df_p = df[df.pathological == 1]
@@ -2142,7 +2217,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
     ax7.legend(handles=patches, title='Pathological')
-
+    
     # ax0 and ax1 true age hists
     bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
@@ -2519,7 +2594,7 @@ def read_result(
     exp_results = pd.concat(exp_results).sort_values(['seed', 'valid_set_i'])
     return exp_results
 
-
+"""
 def _read_result(
     exp_dir,
     result,
@@ -2560,6 +2635,53 @@ def _read_result(
         this_result['gap'] = this_result.y_true - this_result.y_pred
     elif result == 'train_repds':
         pred_path = os.path.join(exp_dir, 'preds', f'train_end_train_preds.csv')
+        this_result = pd.read_csv(pred_path, index_col=0)
+        this_result['subset'] = 'train'
+        logger.warning('untested')
+    elif result == 'config':
+        this_result = config
+    else:
+        raise ValueError
+    if result != 'config':
+        this_result['seed'] = int(config['seed'])
+        this_result['valid_set_i'] = int(config['valid_set_i'])
+    return this_result
+"""
+
+
+def _read_result(
+    exp_dir,
+    result,
+):
+    checkpoint = 'train_end'
+    config_path = os.path.join(exp_dir, 'config.csv')
+    config = pd.read_csv(config_path, index_col=0).T
+    if result == 'history':
+        hist_path = os.path.join(exp_dir, 'history.csv')
+        this_result = pd.read_csv(hist_path, index_col=0)
+    elif result == 'score':
+        score_path = os.path.join(exp_dir, f'{checkpoint}_scores.csv')
+        this_result = pd.read_csv(score_path, index_col=0)
+    elif result == 'preds':  #in ['valid_preds', 'eval_preds']:
+        subset = test_name(int(config.final_eval))
+        pred_path = os.path.join(exp_dir, result, f'{checkpoint}_{subset}_{result}.csv')
+        preds1 = pd.read_csv(pred_path, index_col=0)
+        preds1['subset'] = subset
+        this_result = preds1
+        try:
+            pred_path = os.path.join(exp_dir, result, f'{checkpoint}_{subset}_not_{config.squeeze()["subset"]}_{result}.csv')
+        except:
+            pred_path = os.path.join(exp_dir, result, f'{checkpoint}_{subset}_rest_{result}.csv')
+        try:
+            preds2 = pd.read_csv(pred_path, index_col=0)
+            preds2['subset'] = f'{subset}_rest'
+            this_result = pd.concat([this_result, preds2])
+        except:
+            pass
+        # TODO: add longitudinal preds?
+        #this_result['gap'] = this_result.y_true - this_result.y_pred
+    elif result == 'train_preds':
+        pred_path = os.path.join(exp_dir, 'preds', f'{checkpoint}_{result}.csv')
         this_result = pd.read_csv(pred_path, index_col=0)
         this_result['subset'] = 'train'
         logger.warning('untested')
@@ -2699,6 +2821,7 @@ def compute_gradients(estimator, ds, batch_size, n_jobs):
     all_grads_df = []
     for pathological, d in ds.split(split_key).items():
         grads = compute_amplitude_gradients(estimator.module, d, batch_size, n_jobs)
+        # TODO: do not average gradients but backtrack to trials to enable subject-wise subgroup analysis (e.g. 30-60 years)
         grads = grads.mean((1, 0))
         freqs, info = get_freqs_and_info(d)
         grads_df = pd.DataFrame(grads, index=info.ch_names, columns=freqs)
@@ -2745,11 +2868,13 @@ def add_grads_cbar(fig, ax_img):
     clb.ax.set_title('') # gradient?
 
     
-def plot_band_grads(all_band_grads, info, band):
-    fig, ax_arr = plt.subplots(1, len(all_band_grads), figsize=(10, 3))
+def plot_band_grads(all_band_grads, info, band, flip_x_y):
+    fig, ax_arr = plt.subplots(1, len(all_band_grads), figsize=(10, 3), squeeze=False)
     # for better comparability, compute vlim over all pathological subsets of a freq band
-    vmin, vmax = np.min([v for k, v in all_band_grads.items()]), np.max([v for k, v in all_band_grads.items()])
-    max_abs = np.abs([vmin, vmax]).max()
+    same_scale = True
+    if same_scale:
+        vmin, vmax = np.min([v for k, v in all_band_grads.items()]), np.max([v for k, v in all_band_grads.items()])
+        max_abs = np.abs([vmin, vmax]).max()
     for subset_i, (subset, band_grads) in enumerate(all_band_grads.items()):
         ax_img, contours = mne.viz.plot_topomap(
             band_grads, 
@@ -2757,12 +2882,17 @@ def plot_band_grads(all_band_grads, info, band):
             size=3,
             names=info.ch_names,
             show=False,
-            axes=ax_arr[subset_i],
-            vlim=(-max_abs, max_abs),
+            axes=ax_arr[0, subset_i],
+            vlim=(-max_abs, max_abs) if same_scale else (None, None),
         )
-        ax_img.axes.set_title(f'{subset}\n')
-        if subset_i == 0:
-            ax_img.axes.set_ylabel('-'.join([str(i) for i in band])+' Hz\n')
+        if not flip_x_y:
+            ax_img.axes.set_title(f'{subset}\n')
+            if subset_i == 0:
+                ax_img.axes.set_ylabel('-'.join([str(i) for i in band])+' Hz\n')
+        else:
+            ax_img.axes.set_title('-'.join([str(i) for i in subset])+' Hz\n')
+            if subset_i == 0:
+                ax_img.axes.set_ylabel(f'{band[0]}\n')
     # move one in for sanity check. one band, all subsets -> same cbar vlim
     add_grads_cbar(fig, ax_img)
     return fig
