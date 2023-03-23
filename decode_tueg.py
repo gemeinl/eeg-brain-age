@@ -346,7 +346,7 @@ def decode_tueg(
         scores = pd.concat([scores, ds_score], axis=1)
         save_csv(scores, out_dir, 'train_end_scores.csv')
         if ds_name == valid_rest_name:
-            grads = compute_gradients(estimator, valid_rest, batch_size, n_jobs)
+            grads = compute_gradients(estimator, ds, batch_size, n_jobs)
             save_csv(grads, grad_path, f'train_end_{valid_rest_name}_grads.csv')
     logger.info('done.')
     
@@ -2047,9 +2047,11 @@ def plot_age_gap_hist_with_threshs(
     ax = sns.histplot(data=g1_patho, x='gap', color='r', ax=ax, bins=bins, kde=True, label='True')
     
     patho_mean = g1[g1['pathological'] == True]['gap'].mean()
+    patho_std = g1[g1['pathological'] == True]['gap'].std()
     non_patho_mean = g1[g1['pathological'] == False]['gap'].mean()
-    ax.axvline(non_patho_mean, c='cyan', label=f'False mean ({non_patho_mean:.2f})')
-    ax.axvline(patho_mean, c='magenta', label=f'True mean ({patho_mean:.2f})')
+    non_patho_std = g1[g1['pathological'] == False]['gap'].std()
+    ax.axvline(non_patho_mean, c='cyan', label=f'False mean ({non_patho_mean:.2f} $\pm {non_patho_std:.2f}$)')
+    ax.axvline(patho_mean, c='magenta', label=f'True mean ({patho_mean:.2f} $\pm {patho_std:.2f}$)')
     
     ax.set_xlabel('Decoded Age – Chronological Age [years]')
 
@@ -2332,11 +2334,18 @@ def plot_age_gap_hist(
     ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, label='False')
     ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
     mean_non_patho_gap = non_patho_df.gap.mean()
+    std_non_patho_gap = non_patho_df.gap.std()
     mean_patho_gap = patho_df.gap.mean()
+    std_patho_gap = patho_df.gap.std()
     if not non_patho_df.empty:
-        ax.axvline(mean_non_patho_gap, c='cyan', label=f'False mean ({mean_non_patho_gap:.2f})')
+        ax.axvline(
+            mean_non_patho_gap, c='cyan', 
+            label=f'False mean ({mean_non_patho_gap:.2f} $\pm {std_non_patho_gap:.2f}$)'),
     if not patho_df.empty:
-        ax.axvline(mean_patho_gap, c='magenta', label=f'True mean ({mean_patho_gap:.2f})')
+        ax.axvline(
+            mean_patho_gap, c='magenta', 
+            label=f'True mean ({mean_patho_gap:.2f} $\pm {std_patho_gap:.2f}$)',
+        )
 #     if mean_patho_gap > mean_non_patho_gap:
 #         ax.text(mean_non_patho_gap + (mean_patho_gap - mean_non_patho_gap)/2, ax.get_ylim()[1], 
 #                 f"{(mean_patho_gap - mean_non_patho_gap):.2f}", fontweight='bold',
@@ -2348,7 +2357,7 @@ def plot_age_gap_hist(
     max_abs_gap = max(abs(df.gap))*1.1
     ax.set_xlim(-max_abs_gap, max_abs_gap)
     ax.set_xlabel('Decoded Age – Chronological Age [years]')
-    ax.set_title(f'Brain age gap')
+    #ax.set_title(f'Brain age gap')
     ax.legend(title='Pathological', loc='upper left')
     return ax
 
@@ -2791,6 +2800,17 @@ def extract_longitudinal_dataset(description, kind, load):
             ds.append(d)
         ds = BaseConcatDataset(ds)
         return ds
+    
+    
+def fit_deconfound_model(y_true, y_pred, kind):
+    if kind == 'quadratic':
+        model = np.poly1d(np.polyfit(y_true, y_pred - y_true, 2))
+    elif kind == 'linear':
+        m, b = np.polyfit(y_true, y_pred - y_true, 1)
+        model = lambda y_true: -(m * y_true + b)
+    else:
+        raise ValueError
+    return model
 
 
 def _deconfound(y_true, y_pred, kind):
@@ -2821,7 +2841,9 @@ def compute_gradients(estimator, ds, batch_size, n_jobs):
     all_grads_df = []
     for pathological, d in ds.split(split_key).items():
         grads = compute_amplitude_gradients(estimator.module, d, batch_size, n_jobs)
+        print(grads.shape)
         # TODO: do not average gradients but backtrack to trials to enable subject-wise subgroup analysis (e.g. 30-60 years)
+        # 
         grads = grads.mean((1, 0))
         freqs, info = get_freqs_and_info(d)
         grads_df = pd.DataFrame(grads, index=info.ch_names, columns=freqs)
@@ -2837,12 +2859,11 @@ def get_freqs_and_info(ds):
     names = [ch.replace('P', 'p') if ch in ['FP1', 'FP2'] else ch for ch in names]
     sfreq = ds.datasets[0].windows.info['sfreq']
     freqs = np.fft.rfftfreq(ds[0][0].shape[1], 1/sfreq)
-    info = make_info(names)
+    info = make_info(names, sfreq)
     return freqs, info
 
 
-def make_info(names):
-    sfreq = 1
+def make_info(names, sfreq):
     montage = mne.channels.make_standard_montage('standard_1020')
     info = mne.create_info(names, sfreq, ch_types='eeg')
     info = info.set_montage(montage)
