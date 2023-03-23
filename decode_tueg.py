@@ -677,6 +677,7 @@ def add_ages_from_additional_sources(ds):
         d_.description['report'] = TUHAbnormal._read_physician_report(
             d_.description.path.replace('TUH_PRE', 'TUH').replace('.edf', '.txt'),
         )
+        # TODO: allow to be mne.Epochs
         rec_year = d_.raw.info['meas_date'].year
         # seems like one (?) header broke in preprocessing. read header of original unpreprocessed reocrding
         header = TUHAbnormal._read_edf_header(d_.description.path.replace('TUH_PRE', 'TUH'))
@@ -700,6 +701,38 @@ def add_ages_from_additional_sources(ds):
     return ds
 
 
+def _add_ages_from_additional_sources(description):
+    for i in range(len(description)):
+        p = description.iloc[i].path
+        # manually add back missing reports here! -.-
+#        d_.description['report'] = TUHAbnormal._read_physician_report(
+#            d_.description.path.replace('TUH_PRE', 'TUH').replace('.edf', '.txt'),
+#        )
+        # TODO: allow to be mne.Epochs
+        raw = mne.io.read_raw_edf(p, verbose='error')
+        rec_year = raw.info['meas_date'].year
+        # seems like one (?) header broke in preprocessing. read header of original unpreprocessed reocrding
+        header = TUHAbnormal._read_edf_header(p)
+        pattern = r'\d\d-\w\w\w-(\d\d\d\d)'
+        matches = re.findall(pattern, str(header))
+        if len(matches) != 1:
+            birthyear = np.nan
+        else:
+            birthyear = int(matches[0])
+        description.loc[i, 'date_age'] = int(rec_year) - birthyear
+        pattern = r'(\d+)[ -]+?[years]{3,5}[ -]+?[old]{3}'
+        # is this also fine? also finds 33 y.o. often used in old reports
+        #pattern = r'(\d+)[ -]+?[years]{1,5}[ -.]+?[old]{1,3}[ .]+?'  
+        matches = re.findall(pattern, description.iloc[i].report)
+        if len(matches) >= 1:
+            # assume report always starts with 'XX year old ...'
+            match = int(matches[0])
+        elif len(matches) == 0:
+            match = np.nan
+        description.loc[i, 'report_age'] = match
+    return description
+
+
 def reject_derivating_ages(tuabn_train):
     logger.info(f'rejecting recordings with > 1 year derivation in header, dates, and report')
     d = tuabn_train.description
@@ -720,6 +753,90 @@ def _reject_derivating_ages(description):
     c3 = (description.date_age - description.report_age).abs() < 2
     ids = description[c1 & c2 & c3].index.to_list()
     return ids
+
+
+"""
+def plot_age_source_comparison(df):
+    offset = 10
+    palette = ['b', 'r']
+    if True not in df.pathological.unique():
+        palette = ['b'] 
+    if False not in df.pathological.unique():
+        palette = ['r'] 
+    ax = sns.jointplot(data=df, x='date_age', y='age', height=5, hue='pathological', palette=palette)
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax.ax_joint.set_xlabel(f'Age (n={len(df.date_age)}) [Measurement Date − Birth Year]')
+    ax.ax_joint.set_ylabel(f'Age (n={len(df.age)}) [EDF Header]')
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    mae = mean_absolute_error(df[~df.date_age.isna()].date_age, df[~df.date_age.isna()].age)
+    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years mae', y=1.01)
+    ax.ax_joint.legend(title='Pathological')
+    mini = min(df.age.min(), df.date_age.min()) - offset
+    maxi = max(df.age.max(), df.date_age.max()) + offset
+    ax.ax_joint.set_xlim(mini, maxi)
+    ax.ax_joint.set_ylim(mini, maxi)
+
+    ax = sns.jointplot(data=df, x='report_age', y='age', height=5, hue='pathological', palette=palette)
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax.ax_joint.set_xlabel(f'Age (n={len(df[~df.report_age.isna()])}) [Medical Report]')
+    ax.ax_joint.set_ylabel(f'Age (n={len(df[~df.report_age.isna()].age)}) [EDF Header]')
+    mae = mean_absolute_error(df[~df.report_age.isna()].report_age, df[~df.report_age.isna()].age)
+    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years mae', y=1.01)
+    ax.ax_joint.legend(title='Pathological')
+    mini = min(df.age.min(), df.report_age.min()) - offset
+    maxi = max(df.age.max(), df.report_age.max()) + offset
+    ax.ax_joint.set_xlim(mini, maxi)
+    ax.ax_joint.set_ylim(mini, maxi)
+
+    ax = sns.jointplot(data=df, x='report_age', y='date_age', height=5, hue='pathological', palette=palette)
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax.ax_joint.set_xlabel(f'Age (n={len(df.report_age)})[Measurement Date − Birth Year]')
+    ax.ax_joint.set_ylabel(f'Age (n={len(df.date_age)}) [Medical Report]')
+    mae = mean_absolute_error(df[~df.report_age.isna()].report_age, df[~df.report_age.isna()].date_age)
+    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years mae', y=1.01)
+    ax.ax_joint.legend(title='Pathological')
+    mini = min(df.report_age.min(), df.date_age.min()) - offset
+    maxi = max(df.report_age.max(), df.date_age.max()) + offset
+    ax.ax_joint.set_xlim(mini, maxi)
+    ax.ax_joint.set_ylim(mini, maxi)
+"""
+
+
+def _plot_age_source_comparison(df, age1, age2):
+    offset = 10
+    palette = ['b', 'r']
+    if True not in df.pathological.unique():
+        palette = ['b'] 
+    if False not in df.pathological.unique():
+        palette = ['r'] 
+    cond = ~df[age1].isna() & ~df[age2].isna()
+    df_ = df[cond]
+    ax = sns.jointplot(data=df_, x=age1, y=age2, height=5, hue='pathological', palette=palette)
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
+    mae = mean_absolute_error(df_[age1], df_[age2])
+    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years mae', y=1.01)
+    ax.ax_joint.legend(title='Pathological')
+    mini = min(df_[age1].min(), df_[age2].min()) - offset
+    maxi = max(df_[age1].max(), df_[age2].max()) + offset
+    ax.ax_joint.set_xlim(mini, maxi)
+    ax.ax_joint.set_ylim(mini, maxi)
+#    ax.ax_joint.set_xlabel(f'Age (n={len(df_.date_age)}) [Measurement Date − Birth Year]')
+#    ax.ax_joint.set_ylabel(f'Age (n={len(df_.age)}) [EDF Header]')
+    return ax
+
+
+def plot_age_source_comparisons(df):
+    ax1 = _plot_age_source_comparison(df, 'date_age', 'age')
+    ax1.ax_joint.set_xlabel(f'Age [Measurement Date − Birth Year]')  # (n={len(df_.date_age)}) 
+    ax1.ax_joint.set_ylabel(f'Age [EDF Header]')  # (n={len(df_.age)}) 
+    ax2 = _plot_age_source_comparison(df, 'report_age', 'age')
+    ax2.ax_joint.set_xlabel(f'Age [Medical report]')  # (n={len(df_.date_age)}) 
+    ax2.ax_joint.set_ylabel(f'Age [EDF Header]')  # (n={len(df_.age)}) 
+    ax3 = _plot_age_source_comparison(df, 'date_age', 'report_age')
+    ax3.ax_joint.set_xlabel(f'Age [Measurement Date − Birth Year]')  # (n={len(df_.age)}) 
+    ax3.ax_joint.set_ylabel(f'Age [Medical report]')  # (n={len(df_.date_age)}) 
+    return ax1, ax2, ax3
 
 
 def get_datasets(
