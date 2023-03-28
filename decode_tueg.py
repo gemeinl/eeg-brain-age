@@ -708,7 +708,7 @@ def _add_ages_from_additional_sources(description):
 #        d_.description['report'] = TUHAbnormal._read_physician_report(
 #            d_.description.path.replace('TUH_PRE', 'TUH').replace('.edf', '.txt'),
 #        )
-        # TODO: allow to be mne.Epochs
+        # TODO: allow to be mne.Epochs?
         raw = mne.io.read_raw_edf(p, verbose='error')
         rec_year = raw.info['meas_date'].year
         # seems like one (?) header broke in preprocessing. read header of original unpreprocessed reocrding
@@ -2337,6 +2337,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
     ax7.legend(handles=patches, title='Pathological')
     
+    # TODO: get ticks of ax0 and ax1, get the one with more and use for both
     # ax0 and ax1 true age hists
     bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
@@ -2349,7 +2350,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
     ax2.axhline(df_np.y_pred.mean(), c='cyan')
     ax2.axhline(df_p.y_pred.mean(), c='magenta')
-    ax2.set_xticks(ax0.get_yticks()[:-1])
+    #ax2.set_xticks(ax0.get_yticks()[:-1])
     ax2.set_yticks(np.linspace(0, 100, 11, dtype='int'))
     ax2.legend()
     
@@ -2528,15 +2529,15 @@ def accuracy_perumtations(df, n_repetitions):
     return orig_acc, accs
 
 
-def age_gap_diff_permutations(df, n_repetitions, subject_wise):
+def age_gap_diff_permutations(df, n_repetitions, subject_wise, key='gap'):
     if subject_wise:
         df = df.groupby(['subject', 'pathological'], as_index=False).mean(numeric_only=True)
-    gaps = df['gap']
+    gaps = df[key]
     # averaging above changes dtype of pathological from bool to float....
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
-    mean_patho_gap = patho_df['gap'].mean()
-    mean_non_patho_gap = non_patho_df['gap'].mean()
+    mean_patho_gap = patho_df[key].mean()
+    mean_non_patho_gap = non_patho_df[key].mean()
     mean_gap_diff = mean_patho_gap - mean_non_patho_gap
 
     mean_gap_diffs = []
@@ -2806,6 +2807,10 @@ def _read_result(
             pass
         # TODO: add longitudinal preds?
         #this_result['gap'] = this_result.y_true - this_result.y_pred
+    elif result.startswith('longitudinal'):
+        pred_path = os.path.join(exp_dir, 'preds', f'{checkpoint}_{result}_preds.csv')
+        this_result = pd.read_csv(pred_path, index_col=0)
+        this_result['subset'] = result
     elif result == 'train_preds':
         pred_path = os.path.join(exp_dir, 'preds', f'{checkpoint}_{result}.csv')
         this_result = pd.read_csv(pred_path, index_col=0)
