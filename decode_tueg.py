@@ -2577,6 +2577,64 @@ def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
     return ax
 
 
+def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
+    d, n_repetitions):
+    ax0, ax1 = get_hist_perm_test_grid()
+    ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0)
+
+    observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
+    ax1 = sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
+    ax1.axhline(observed, c='g')
+    ylim = np.max(np.abs(np.array(ax1.get_ylim())))
+    ax1.set_ylim(-ylim, ylim)
+    # set violin alpha = .5
+    # https://github.com/mwaskom/seaborn/issues/622
+    from matplotlib.collections import PolyCollection
+    for art in ax1.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.5)
+    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', 
+               bbox_to_anchor=(.5, -.2))
+    ax1.set_ylabel('Difference [years]')    
+    
+
+def plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(12,3))
+    cs = {0: 'cyan', 1: 'magenta'}
+    for n, g in d.groupby('pathological'):
+        ax = sns.histplot(data=g, x='mean', hue='pathological', palette={0: 'b', 1: 'r'}, 
+                          binwidth=1, kde=True, ax=ax, binrange=(0, 30))  # TODO: fix bins
+        ax.axvline(
+            g['mean'].mean(), c=cs[n], 
+            label=f"{g['mean'].mean():.2f} $\pm${g['mean'].std():.2f}",
+        )
+    ax.legend()
+    ax.set_xlabel('Mean absolute running difference of mean-corrected gaps [years]')
+    return ax
+
+
+def mean_abs_running_diff_of_mean_corrected_gaps(all_preds):
+    # group all preds by subject and pathology status
+    # subtract mean of pred and label
+    # then compute the diffs
+    # take the absolute value
+    # and average
+    # intuitively this describes how 
+    d = []
+    for i, ((subject, pathological), g) in enumerate(all_preds.groupby(['subject', 'pathological'])):
+        g['y_true'] -= g['y_true'].mean()
+        g['y_pred'] -= g['y_pred'].mean()
+        mean = (g.y_pred - g.y_true).diff().abs().mean()
+        d.append({
+            'mean': mean,  # TODO: diff could be a problem in y_pred 
+            'subject': subject,
+            'pathological': pathological,
+        })
+    d = pd.DataFrame(d)
+    return d
+
+
 def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5,
                 fs=24, ylim=20, bins=np.linspace(0, 100, 101), out_dir=None,
                 show_title=True, show_pathology_legend=True):
@@ -2882,6 +2940,83 @@ def plot_longitudinal_interval_hists(description):
     ax.get_legend().legendHandles[2].set_color('g')
     ax.set_title('Recording Intervals in TUH Longitudinal Datasets')
     return ax
+
+
+def plot_n_recs_per_subject_and_rec_intervals(
+    n_recs_per_subject,
+    rec_intervals,
+):
+    df = rec_intervals
+    # n_recs_per_subject = df.groupby(['Longitudinal', 'subject'], as_index=False).size()    
+    fig, ax_arr = plt.subplots(1, 2, figsize=(12, 3))
+    ax = ax_arr[0]
+    x = 'Longitudinal'
+    y = 'size'
+    ax = sns.violinplot(
+        data=n_recs_per_subject, 
+        x=x, 
+        y=y, 
+        inner='quartile',
+        cut=0,
+        palette=['b', 'r', 'g'], 
+        ax=ax,
+    )
+    ax.set_ylim(2, 6)
+    ax.set_ylabel('Number of recordings per subject')
+    ax.set_xlabel('Longitudinal Dataset')
+    means = n_recs_per_subject.groupby(x).mean()
+    stds = n_recs_per_subject.groupby(x).std()
+    mean = means.loc['Non-pathological', y]
+    std = stds.loc['Non-pathological', y]
+    ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['Pathological', y]
+    std = stds.loc['Pathological', y]
+    ax.axhline(mean, .33, .66, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['Transition', y]
+    std = stds.loc['Transition', y]
+    ax.axhline(mean, .66, 1, c='g', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    ax.legend(loc='upper center', ncol=3, bbox_to_anchor=(.5,1.22))
+
+    ax = ax_arr[1]
+    x = 'Dataset'
+    y = 'Interval [days]'
+    ax = sns.violinplot(
+        data=df,
+        y=y,
+        x=x, 
+        inner='quartile',
+        cut=0, 
+        palette=['b', 'r', 'g'],
+        ax=ax,
+    )
+    means = df.groupby(x).mean()
+    stds = df.groupby(x).std()
+    mean = means.loc['Non-pathological', y]
+    std = stds.loc['Non-pathological', y]
+    ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['Pathological', y]
+    std = stds.loc['Pathological', y]
+    ax.axhline(mean, .33, .66, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['Transition', y]
+    std = stds.loc['Transition', y]
+    ax.axhline(mean, .66, 1, c='g', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    # super slow
+    #ax = sns.swarmplot(
+    #    data=df, y='Interval [days]', x='Dataset', 
+    #    hue='Dataset', palette=['g', 'b', 'r'],
+    #)
+    ax.set_ylim(bottom=0, top=365*4)
+    ax.set_ylabel('Recording Interval [days]')
+    #ax.get_legend().remove()
+    ax.legend(loc='upper center', ncol=3, bbox_to_anchor=(.5,1.22))
+
+
+    from matplotlib.collections import PolyCollection
+    for ax in ax_arr:
+        for art in ax.get_children():
+            if isinstance(art, PolyCollection):
+                art.set_alpha(.75)
+    return ax_arr
 
 
 def extract_longitudinal_dataset(description, kind, load):
