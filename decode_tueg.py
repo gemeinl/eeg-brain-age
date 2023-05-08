@@ -79,7 +79,9 @@ def decode_tueg(
     date,
     debug,
     final_eval,
+    hfreq,
     intuitive_training_scores,
+    lfreq,
     max_age,
     min_age,
     model_name,
@@ -122,8 +124,8 @@ def decode_tueg(
     #warnings.filterwarnings("ignore", message="UserWarning: y_pred contains classes not in y_true")
 
     check_input_args(
-        batch_size, config, data_path, debug, final_eval, intuitive_training_scores,
-        max_age, min_age, model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, 
+        batch_size, config, data_path, debug, final_eval, hfreq, intuitive_training_scores,
+        lfreq, max_age, min_age, model_name, n_epochs, n_jobs, n_restarts, n_train_recordings, 
         out_dir, preload, seed, shuffle_data_before_split, squash_outs, 
         standardize_data, standardize_targets, subsample, subset, target_name, tmax, tmin, 
         valid_set_i, window_size_samples, augment, loss, logger,
@@ -158,6 +160,8 @@ def decode_tueg(
         max_age,
         shuffle_data_before_split,
         subsample,
+        lfreq,
+        hfreq,
     )  
     title = create_title(
         final_eval,
@@ -309,7 +313,7 @@ def decode_tueg(
             logger.debug('preprocessing')
             ds = preprocess(
                 ds, 
-                preprocessors=get_preprocessors(tmin, tmax), 
+                preprocessors=get_preprocessors(tmin=tmin, tmax=tmax, lfreq=lfreq, hfreq=hfreq), 
                 n_jobs=n_jobs,
             )
             logger.debug('windowing')
@@ -409,7 +413,9 @@ def check_input_args(
     data_path,
     debug,
     final_eval,
+    hfreq,
     intuitive_training_scores,
+    lfreq,
     max_age,
     min_age,
     model_name, 
@@ -478,11 +484,15 @@ def check_input_args(
     if final_eval == 0:
         assert valid_set_i in [0, 1, 2, 3, 4]
     if max_age != -1:
+        # is this necessary or automatically checked by kubeflow?
         assert isinstance(max_age, int)
     if min_age != -1:
         assert isinstance(min_age, int)
     if subsample not in ['0', 'match', 'uniform']:
         raise ValueError(f'Unknown subsampling type {subsample}')
+    if lfreq != -1 and hfreq != -1:
+        if hfreq < lfreq:
+            raise ValueError(f'{hfreq} has to be bigger than {lfreq}')
 
 
 def test_name(final_eval):
@@ -854,6 +864,8 @@ def get_datasets(
     max_age,
     shuffle_data_before_split,
     subsample,
+    lfreq,
+    hfreq,
 ):
     logger.debug("indexing files")
     tuabn_train = TUHAbnormal(
@@ -940,7 +952,7 @@ def get_datasets(
     logger.debug(f'some raw durations {some_durations}')
     if tmin != -1 or tmax != -1:
         logger.debug("preprocessing")
-        preprocessors = get_preprocessors(tmin, tmax)
+        preprocessors = get_preprocessors(tmin=tmin, tmax=tmax, lfreq=lfreq, hfreq=hfreq)
         [tuabn_train, tuabn_valid] = [
             preprocess(ds, preprocessors=preprocessors, n_jobs=n_jobs) for ds in [tuabn_train, tuabn_valid]
         ]
@@ -1983,7 +1995,7 @@ def load_exp(
 
 def plot_learning_curves(histories, loss_name, valid_or_eval='Valid', ax=None):
     if ax is None:
-        fig, ax = plt.subplots(1,1,figsize=(12,3))
+        fig, ax = plt.subplots(1,1,figsize=(12,1.5))
     for history in histories:
         ax = sns.lineplot(data=history, y='train_loss', x='epoch', ax=ax, c='g', linewidth=.5)
         ax = sns.lineplot(data=history, y='valid_loss', x='epoch', ax=ax, c='orange', linewidth=.5)
@@ -1996,7 +2008,7 @@ def plot_learning_curves(histories, loss_name, valid_or_eval='Valid', ax=None):
                  label=f'{valid_or_eval} ({mean_valid_loss[-1]:.5f})')
     ax.set_ylabel(loss_name)
     ax.set_xlabel('Epoch')
-    ax.legend(title='Subset')
+    ax.legend(title='Subset', ncol=2)
     return ax
 
 
@@ -2111,23 +2123,27 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     )
     observed, sampled = accuracy_perumtations(g1, n_repetitions)
     # overwrite 'observation' with just 1 threshold
-    observed = balanced_accuracy_score(
+    observed_score = balanced_accuracy_score(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
-    print('observed score', observed)
-
+    
+    central_value = 50
     ax0.set_title('')
-    ax1.axhline(observed, c='lightgreen')
-    sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
-    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
+    ax1.axhline(observed_score, c='lightgreen')
+    sns.violinplot(y=np.abs(np.array(sampled)-central_value)+central_value,
+                   ax=ax1, inner='quartile', color='g')
     ax1.set_ylabel('Accuracy [%]')
-    ylim = np.max(np.abs(np.array(ax1.get_ylim())-50))
-    ax1.set_ylim(50-ylim, 50+ylim)
+    if (np.abs(np.array(sampled)-central_value)+central_value < central_value).any():
+        ylim = np.max(np.abs(np.array(ax1.get_ylim())-central_value))
+        ax1.set_ylim(central_value-ylim, central_value+ylim)
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
     for art in ax1.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
+    # TODO: compute p-value
+    p = compute_p_value_from_sampled_and_observed(sampled, observed)
+    ax1.legend([f'Observed ({observed_score:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
     return ax0
 
 
@@ -2231,7 +2247,7 @@ def create_grid(hist_max_count, max_age):
 #    ax1.set_ylim([0, hist_max_count])
     ax1.set_xticklabels([])
     ax1.set_xlabel(' ')
-    ax1.set_yticklabels([])
+    #ax1.set_yticklabels([])  # in case only pathological, this is wrong
     ax1.set_ylabel(' ')
     ax1.set_facecolor(facecolor)
     ax2.set_ylim(0, max_age)
@@ -2249,6 +2265,12 @@ def create_grid(hist_max_count, max_age):
     ax7.set_facecolor(facecolor)
     ax7.set_xticks([])
     ax7.set_yticks([])
+    
+    # https://stackoverflow.com/questions/30914462/how-to-force-integer-tick-labels
+    from matplotlib.ticker import MaxNLocator
+    ax0.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax1.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
     return fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7
 
 
@@ -2332,12 +2354,15 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     if not df_np.empty:
         mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
         patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years mae)', alpha=.5))
+    else:
+        ax0.set_yticklabels([])
     if not df_p.empty:
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
+    else:
+        ax1.set_yticklabels([]) 
     ax7.legend(handles=patches, title='Pathological')
     
-    # TODO: get ticks of ax0 and ax1, get the one with more and use for both
     # ax0 and ax1 true age hists
     bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
@@ -2345,6 +2370,14 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
     ax1.axvline(df_p.y_true.mean(), c='magenta')
 
+    #get ticks of ax0 and ax1, get the one with more and use for both
+    if not df_np.empty and not df_p.empty:
+        ticks1 = ax0.get_yticks()
+        ticks2 = ax1.get_yticks()
+        ticks = ticks1 if ticks1[-1] > ticks2[-1] else ticks2
+        ax0.set_yticks(ticks)
+        ax1.set_yticks(ticks)
+    
     # ax2 decoded age hist
     sns.histplot(data=df_np, y='y_pred', ax=ax2, color='b', kde=True, bins=bins)
     sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
@@ -2442,7 +2475,8 @@ def plot_age_gap_hist(
 ):
     df = get_subject_wise_df(df)
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(12,3))
+        fig, ax = plt.subplots(1, 1, figsize=(12,1.5))
+    # create bins symmetrically centered around and starting at zero with bin_width spacing 
     bins = np.concatenate([
         np.arange(0, - df.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
         np.arange(bin_width, df.gap.max() + bin_width, bin_width, dtype=int)
@@ -2489,29 +2523,39 @@ def get_hist_perm_test_grid():
     return ax0, ax1
 
 
+# TODO: computation of observed, sampled and p-value should be outside of plotting functions
 def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions):
+    # TODO: why plot rec-wise and compute statistics subj-wise?
     ax0, ax1 = get_hist_perm_test_grid()
-
-    plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
+    ax0 = plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
     this_preds = get_subject_wise_df(this_preds)
-    observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, True)
-    print('observed age gap diff', observed)
-    
+    observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, subject_wise=True)
+    #print('observed age gap diff', observed)
     ax0.set_title('')
+    ax1 = plot_violin_new(np.abs(observed), np.abs(sampled), central_value=0, ax1=ax1)
+    ax1.set_ylabel('Mean Gap Difference [years]')
+    return ax0
+
+
+# TODO: use everywhere, add central value, add p-value
+def plot_violin_new(observed, sampled, central_value, ax1):
     ax1.axhline(observed, c='lightgreen')
     sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
-    ylim = np.max(np.abs(np.array(ax1.get_ylim())))
-    ax1.set_ylim(-ylim, ylim)
+    if (np.array(sampled) < central_value).any():
+        # symmetric spread 
+        ylim = np.max(np.abs(np.array(ax1.get_ylim())))
+        ax1.set_ylim(-ylim, ylim)
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
     for art in ax1.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
-    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', 
+    p = compute_p_value_from_sampled_and_observed(sampled, observed)
+    ax1.legend([f'Observed ({observed:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', 
                bbox_to_anchor=(.5, -.2))
     ax1.set_ylabel('Mean Gap Difference [years]')
-    return ax0
+    return ax1
 
 
 def accuracy_perumtations(df, n_repetitions):
@@ -2530,6 +2574,7 @@ def accuracy_perumtations(df, n_repetitions):
 
 
 def age_gap_diff_permutations(df, n_repetitions, subject_wise, key='gap'):
+    # TODO: move into get_subject_wise_df?
     if subject_wise:
         df = df.groupby(['subject', 'pathological'], as_index=False).mean(numeric_only=True)
     gaps = df[key]
@@ -2549,11 +2594,27 @@ def age_gap_diff_permutations(df, n_repetitions, subject_wise, key='gap'):
     return mean_gap_diff, mean_gap_diffs
 
 
+def compute_p_value_from_sampled_and_observed(sampled, observed):
+    #p = np.min([
+    #    ((sampled >= observed).sum() / len(sampled)),
+    #    ((sampled <= observed).sum() / len(sampled)),
+    #])
+    """
+    sampled = np.array(sampled)
+    p = np.min([(sampled >= observed).mean(), (sampled <= observed).mean()])
+    """
+    p = (np.abs(sampled) >= np.abs(observed)).mean()
+    if p == 0:
+        p = 1/len(sampled)
+    return p
+
+
+# TODO: broken
 def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(12, 3))
-        ax = sns.violinplot(x=sampled_y, kde=True, color='g', inner="quartile")
-    ax.axvline(y, c='lightgreen')
+        ax = sns.violinplot(y=sampled_y, kde=True, color='g', inner="quartile")
+    ax.axhline(y, c='lightgreen')
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
@@ -2563,15 +2624,9 @@ def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
     ax.set_xlabel(xlabel)
     ax.legend(['Observed', 'Sampled'])#, title='Mean Chronological Age - Predicted Age')
     max_abs_lim = max([abs(center_value - i) for i in ax.get_xlim()])
-    ax.set_xlim(center_value-max_abs_lim, center_value+max_abs_lim)
+    ax.set_ylim(center_value-max_abs_lim, center_value+max_abs_lim)
     
-    p = np.min([
-        ((sampled_y >= y).sum() / len(sampled_y)),
-        ((sampled_y <= y).sum() / len(sampled_y)),
-    ])
-    if p == 0:
-        p = 1/len(sampled_y)
-
+    p = compute_p_value_from_sampled_and_observed(sampled_y, y)
     ax.text(y, ax.get_ylim()[1], f'{y:.2f} (p={p:.2E})',
             ha='center', va='bottom', fontweight='bold')
     return ax
@@ -2583,8 +2638,8 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0)
 
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
+    ax1.axhline(observed, c='lightgreen')
     ax1 = sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
-    ax1.axhline(observed, c='g')
     ylim = np.max(np.abs(np.array(ax1.get_ylim())))
     ax1.set_ylim(-ylim, ylim)
     # set violin alpha = .5
@@ -2593,24 +2648,38 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     for art in ax1.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
-    ax1.legend([f'Observed ({observed:.2f})', 'Sampled'], loc='lower center', 
+    p = compute_p_value_from_sampled_and_observed(sampled, observed)
+    ax1.legend([f'Observed ({observed:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', 
                bbox_to_anchor=(.5, -.2))
-    ax1.set_ylabel('Difference [years]')    
+    ax1.set_ylabel('Mean Difference [years]')    
     
 
-def plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=None):
+def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_width=2, ax=None):
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(12,3))
-    cs = {0: 'cyan', 1: 'magenta'}
-    for n, g in d.groupby('pathological'):
-        ax = sns.histplot(data=g, x='mean', hue='pathological', palette={0: 'b', 1: 'r'}, 
-                          binwidth=1, kde=True, ax=ax, binrange=(0, 30))  # TODO: fix bins
+        fig, ax = plt.subplots(1, 1, figsize=(12,1.5))
+    #cs = {0: 'cyan', 1: 'magenta'}
+    df[df['mean'] > cutoff_value] = cutoff_value
+    bins = list(range(0, cutoff_value, bin_width))
+    
+    patho_df = df[df.pathological == 1]
+    non_patho_df = df[df.pathological == 0]
+    ax = sns.histplot(data=non_patho_df, x='mean', color='b', ax=ax, kde=True, bins=bins, label='False')
+    ax = sns.histplot(data=patho_df, x='mean', color='r', ax=ax, kde=True, bins=bins, label='True')
+    mean_non_patho_gap = non_patho_df['mean'].mean()
+    std_non_patho_gap = non_patho_df['mean'].std()
+    mean_patho_gap = patho_df['mean'].mean()
+    std_patho_gap = patho_df['mean'].std()
+    if not non_patho_df.empty:
         ax.axvline(
-            g['mean'].mean(), c=cs[n], 
-            label=f"{g['mean'].mean():.2f} $\pm${g['mean'].std():.2f}",
+            mean_non_patho_gap, c='cyan', 
+            label=f'False mean ({mean_non_patho_gap:.2f} $\pm {std_non_patho_gap:.2f}$)'),
+    if not patho_df.empty:
+        ax.axvline(
+            mean_patho_gap, c='magenta', 
+            label=f'True mean ({mean_patho_gap:.2f} $\pm {std_patho_gap:.2f}$)',
         )
     ax.legend()
-    ax.set_xlabel('Mean absolute running difference of mean-corrected gaps [years]')
+    ax.set_xlabel('Mean Absolute Running Difference of Mean-corrected Gaps [years]')
     return ax
 
 
@@ -3187,7 +3256,9 @@ if __name__ == "__main__":
     parser.add_argument('--debug', type=int)
     parser.add_argument('--fast-mode', type=int)
     parser.add_argument('--final-eval', type=int)
+    parser.add_argument('--hfreq', type=int)
     parser.add_argument('--intuitive-training-scores', type=int)
+    parser.add_argument('--lfreq', type=int)
     parser.add_argument('--loss', type=str)
     parser.add_argument('--max-age', type=int)
     parser.add_argument('--min-age', type=int)
