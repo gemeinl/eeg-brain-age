@@ -473,7 +473,7 @@ def check_input_args(
         'identity', '0',
     ]:
         raise ValueError(f"Unknown augmentation {augment}.")
-    if loss not in ['mse', 'mae', 'log_cosh', 'huber', 'nll']:
+    if loss not in ['mse', 'mae', 'log_cosh', 'huber', 'nll', 'mape']:
         raise ValueError(f'Unkown loss {loss}')
     if target_name in ['pathological', 'gender', 'age_clf'] and loss != 'nll':
         raise ValueError(f"loss '{loss}' cannot be used with this target ({target_name})")
@@ -1644,6 +1644,9 @@ def get_estimator(
         loss_function = log_cosh_loss
     elif loss == 'huber':
         loss_function = torch.nn.functional.huber_loss
+    elif loss == 'mape':
+        # https://github.com/Lightning-AI/torchmetrics/blob/54a06013cdac4895bf8e85b583c5f220388ebc1d/src/torchmetrics/functional/regression/mape.py#L22
+        loss_function = lambda preds, target: torch.mean(torch.abs(preds-target)/torch.clamp(target, min=1.173-6))
     Estimator = EEGRegressor if target_name == 'age' else EEGClassifier
     estimator = Estimator(
         model,
@@ -1874,7 +1877,7 @@ def _create_final_scores(
     # always aggregate to subject-wise score
     if subject_wise:
         # TODO: y_true are no ints after this operation anymore. pandas introduces floating point imprecisions...
-        # TODO: groupby subject not sufficient for longitudinal datasets. add pathology status!
+        # TODO: groupby subject not sufficient for longitudinal datasets. add pathology status!?
         y_true = preds.groupby('subject')['y_true'].mean()
         y_pred = preds.groupby('subject')['y_pred'].mean()
         if target_name == 'age':
@@ -1884,6 +1887,10 @@ def _create_final_scores(
                 ('mdae', lambda y_true, y_pred: np.nanmedian(np.abs(y_true - y_pred))), 
                 ('r2', r2_score),
                 ('mape', lambda y_true, y_pred: np.nanmean(np.abs(np.abs(y_true - y_pred) / y_true))),
+                # mean absolute percentage error has downsides
+                # https://stats.stackexchange.com/a/299713
+                # use weighted mean absolute percentage error instead
+                ('wmape', lambda y_true, y_pred: np.sum(np.abs(y_pred-y_true))/np.sum(np.abs(y_true))),
                 ('mdape', lambda y_true, y_pred: np.nanmedian(np.abs(np.abs(y_true - y_pred) / y_true))), 
             ]
         else:
@@ -1965,13 +1972,14 @@ def _predict_ds(
 
 # TODO: compute longitudinal statistics on session level as multiple recs in one session could bias average time?
 def get_longitudinal_ds(kind, subset):
+    # depending on if this is run in post-hoc or in-run, the working directory changes...
     for base_dir in ['/work/', '/home/jovyan/']:
         ds_path = os.path.join(base_dir, 'longitudinal', f'{kind}_pre_win.pkl')
         try:
             with open(ds_path, 'rb') as f:
                 ds = pickle.load(f)
         except:
-            raise RuntimeError
+            pass
     # only allow subselection of male / female or based on age
     if subset not in ['normal', 'abnormal', 'mixed']:
         ds = subselect(ds, subset)
@@ -2126,13 +2134,15 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     observed_score = balanced_accuracy_score(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
     
+    """
     central_value = 50
     ax0.set_title('')
     ax1.axhline(observed_score, c='lightgreen')
-    sns.violinplot(y=np.abs(np.array(sampled)-central_value)+central_value,
+    sns.violinplot(y=sampled,
+    #sns.violinplot(y=np.abs(np.array(sampled)-central_value)+central_value,
                    ax=ax1, inner='quartile', color='g')
     ax1.set_ylabel('Accuracy [%]')
-    if (np.abs(np.array(sampled)-central_value)+central_value < central_value).any():
+    if (np.abs(sampled) < central_value).any():
         ylim = np.max(np.abs(np.array(ax1.get_ylim())-central_value))
         ax1.set_ylim(central_value-ylim, central_value+ylim)
     # set violin alpha = .5
@@ -2144,10 +2154,63 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     # TODO: compute p-value
     p = compute_p_value_from_sampled_and_observed(sampled, observed)
     ax1.legend([f'Observed ({observed_score:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
+    """
+    ax1 = plot_violin_new(observed, sampled, central_value=50, ax1=ax1)
+    ax1.set_ylabel('Accuracy [%]')
     return ax0
 
 
 def plot_age_gap_hist_with_threshs(
+    g1,
+    bin_width=2,
+    ax=None,
+    t_low=None,
+    t_high=None,
+):
+    ax = plot_age_gap_hist(g1, bin_width, ax)
+    if t_low is None and t_high is None:
+        # TODO: threshs should always be given from the outside
+        t_low, t_high = find_threshs(g1)
+        print('found thresholds', t_low, t_high)
+    else:
+        print('given thresholds', t_low, t_high)
+
+    ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
+    ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
+
+    ax.legend(title='Pathological', loc='upper left')
+    
+    max_abs_v = g1.gap.abs().max()*1.1
+    ax.set_xlim(-max_abs_v, max_abs_v)
+
+    ax.axvspan(
+        t_high, ax.get_xlim()[1],
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        ax.get_xlim()[0], t_low, 
+        facecolor='orange', alpha=.1, zorder=-100,
+    )
+    ax.axvspan(
+        t_low, t_high,
+        facecolor='teal', alpha=.1, zorder=-100,
+    )
+
+    # in the center of sections add text what it means
+    """
+    x1 = t_low + (ax.get_xlim()[0] - t_low) / 2
+    x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
+    x3 = t_low + (t_high - t_low) / 2
+    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
+    ax.text(x1, y, "True", ha='right', weight='bold', c='r')
+    ax.text(x3, y, "False", ha='center', weight='bold', c='b')
+    ax.text(x2, y, "True", ha='left', weight='bold', c='r')
+    """
+    return ax, t_low, t_high
+
+"""
+# TODO: use plot_age_gap_hist and add threshs
+def plot_age_gap_hist_with_threshs_old(
     g1,
     bin_width=2,
     ax=None,
@@ -2218,7 +2281,7 @@ def plot_age_gap_hist_with_threshs(
     #ax.text(x3, y, "False", ha='center', weight='bold', c='b')
     #ax.text(x2, y, "True", ha='left', weight='bold', c='r')
     return ax, t_low, t_high
-
+"""
 
 def create_grid(hist_max_count, max_age):
     #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
@@ -2483,8 +2546,10 @@ def plot_age_gap_hist(
     ])
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
-    ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, label='False')
-    ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
+    ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, 
+                      label=f'False (n={len(non_patho_df)})')
+    ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, 
+                      label=f'True (n={len(patho_df)})')
     mean_non_patho_gap = non_patho_df.gap.mean()
     std_non_patho_gap = non_patho_df.gap.std()
     mean_patho_gap = patho_df.gap.mean()
@@ -2532,7 +2597,8 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions)
     observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, subject_wise=True)
     #print('observed age gap diff', observed)
     ax0.set_title('')
-    ax1 = plot_violin_new(np.abs(observed), np.abs(sampled), central_value=0, ax1=ax1)
+    #ax1 = plot_violin_new(np.abs(observed), np.abs(sampled), central_value=0, ax1=ax1)
+    ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
     ax1.set_ylabel('Mean Gap Difference [years]')
     return ax0
 
@@ -2542,9 +2608,9 @@ def plot_violin_new(observed, sampled, central_value, ax1):
     ax1.axhline(observed, c='lightgreen')
     sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
     if (np.array(sampled) < central_value).any():
-        # symmetric spread 
+        # TODO: fix symmetric spread 
         ylim = np.max(np.abs(np.array(ax1.get_ylim())))
-        ax1.set_ylim(-ylim, ylim)
+        ax1.set_ylim(central_value-ylim+central_value, ylim)
     # set violin alpha = .5
     # https://github.com/mwaskom/seaborn/issues/622
     from matplotlib.collections import PolyCollection
@@ -2552,9 +2618,11 @@ def plot_violin_new(observed, sampled, central_value, ax1):
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
     p = compute_p_value_from_sampled_and_observed(sampled, observed)
-    ax1.legend([f'Observed ({observed:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', 
-               bbox_to_anchor=(.5, -.2))
-    ax1.set_ylabel('Mean Gap Difference [years]')
+    print(f"{p:.2E}")
+    ax1.legend([
+        f'Observed ({observed:.2f})',#, p$\leq${p:.2E})',  # TODO: add back p-value?
+        'Sampled',
+    ], loc='lower center', bbox_to_anchor=(.5, -.2))
     return ax1
 
 
@@ -2609,6 +2677,7 @@ def compute_p_value_from_sampled_and_observed(sampled, observed):
     return p
 
 
+"""
 # TODO: broken
 def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
     if ax is None:
@@ -2630,6 +2699,7 @@ def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
     ax.text(y, ax.get_ylim()[1], f'{y:.2f} (p={p:.2E})',
             ha='center', va='bottom', fontweight='bold')
     return ax
+"""
 
 
 def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
@@ -2638,6 +2708,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0)
 
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
+    # TODO: use plot violin
     ax1.axhline(observed, c='lightgreen')
     ax1 = sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
     ylim = np.max(np.abs(np.array(ax1.get_ylim())))
@@ -2652,6 +2723,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     ax1.legend([f'Observed ({observed:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', 
                bbox_to_anchor=(.5, -.2))
     ax1.set_ylabel('Mean Difference [years]')    
+    return ax0
     
 
 def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_width=2, ax=None):
@@ -2663,8 +2735,10 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
     
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
-    ax = sns.histplot(data=non_patho_df, x='mean', color='b', ax=ax, kde=True, bins=bins, label='False')
-    ax = sns.histplot(data=patho_df, x='mean', color='r', ax=ax, kde=True, bins=bins, label='True')
+    ax = sns.histplot(data=non_patho_df, x='mean', color='b', ax=ax, kde=True, bins=bins, 
+                      label=f'False (n={len(non_patho_df)})')
+    ax = sns.histplot(data=patho_df, x='mean', color='r', ax=ax, kde=True, bins=bins, 
+                      label=f'True (n={len(patho_df)})')
     mean_non_patho_gap = non_patho_df['mean'].mean()
     std_non_patho_gap = non_patho_df['mean'].std()
     mean_patho_gap = patho_df['mean'].mean()
@@ -2683,15 +2757,16 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
     return ax
 
 
-def mean_abs_running_diff_of_mean_corrected_gaps(all_preds):
+def mean_abs_running_diff_of_mean_corrected_gaps(rec_preds):
     # group all preds by subject and pathology status
     # subtract mean of pred and label
+    # compute the gaps
     # then compute the diffs
     # take the absolute value
     # and average
-    # intuitively this describes how 
+    # TODO: does not take into account different seeds / runs?!
     d = []
-    for i, ((subject, pathological), g) in enumerate(all_preds.groupby(['subject', 'pathological'])):
+    for i, ((subject, pathological), g) in enumerate(rec_preds.groupby(['subject', 'pathological'])):
         g['y_true'] -= g['y_true'].mean()
         g['y_pred'] -= g['y_pred'].mean()
         mean = (g.y_pred - g.y_true).diff().abs().mean()
