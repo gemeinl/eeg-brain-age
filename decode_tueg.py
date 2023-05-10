@@ -2097,8 +2097,8 @@ def plot_learning(
 
 
 def find_threshs(df):
-    gaps = df.gap.values
-    sorted_gaps = df.gap.sort_values().values
+    gaps = df.y_pred - df.y_true
+    sorted_gaps = gaps.sort_values().values
 
     accs = []
     for g in sorted_gaps:
@@ -2116,14 +2116,63 @@ def find_threshs(df):
     return (t_2, t_1) if t_2 < t_1 else (t_1, t_2)
 
 
-def plot_age_gap_hist_with_thresh_and_permutation_test(
+# TODO:----
+def get_perm_test_hist_perm_test_grid():
+    fig, ax = plt.subplots(1, 1, figsize=(18,4))
+    plt.subplots_adjust(wspace=1)
+    # hist
+    ax0 = plt.subplot2grid((3, 23), (0, 3), rowspan=3, colspan=17, fig=fig)
+    # perm test1
+    ax1 = plt.subplot2grid((3, 23), (0, 20), rowspan=3, colspan=3, fig=fig)
+    # perm test2
+    ax2 = plt.subplot2grid((3, 23), (0, 0), rowspan=3, colspan=3, fig=fig)
+    ax1.yaxis.tick_right()
+    ax1.yaxis.set_label_position("right")
+    ax0.yaxis.tick_right()
+    #ax0.tick_params(axis="y",direction="in", pad=-12)
+    return ax0, ax1, ax2
+
+
+def plot_permutation_test_and_age_gap_hist_with_thresh_and_permutation_test(
     g1,
+    t_low,
+    t_high,
     bin_width,
     n_repetitions,
-    t_low=None,
-    t_high=None,
 ):
-    ax0, ax1 = get_hist_perm_test_grid()
+    ax0, ax1, ax2 = get_perm_test_hist_perm_test_grid()
+    ax3 = plot_age_gap_hist_and_permutation_test(
+        this_preds=g1,
+        bin_width=bin_width,
+        n_repetitions=n_repetitions,
+        ax0=ax0,
+        ax1=ax2,
+    )
+    ax0.clear()
+    ax4 = plot_age_gap_hist_with_thresh_and_permutation_test(
+        g1=g1,
+        t_low=t_low,
+        t_high=t_high,
+        bin_width=bin_width,
+        n_repetitions=n_repetitions,
+        ax0=ax0,
+        ax1=ax1,
+    )
+    return ax3
+# TODO:----
+
+
+def plot_age_gap_hist_with_thresh_and_permutation_test(
+    g1,
+    t_low,
+    t_high,
+    bin_width,
+    n_repetitions,
+    ax0=None,
+    ax1=None,
+):
+    if ax0 is None and ax1 is None:
+        ax0, ax1 = get_hist_perm_test_grid()
 
     g1 = get_subject_wise_df(g1)
     ax0, t_low, t_high = plot_age_gap_hist_with_threshs(
@@ -2141,19 +2190,20 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
 
 def plot_age_gap_hist_with_threshs(
     g1,
+    t_low,
+    t_high,
     bin_width=2,
     ax=None,
-    t_low=None,
-    t_high=None,
 ):
     ax = plot_age_gap_hist(g1, bin_width, ax)
+    """
     if t_low is None and t_high is None:
         # TODO: threshs should always be given from the outside
         t_low, t_high = find_threshs(g1)
         print('found thresholds', t_low, t_high)
     else:
         print('given thresholds', t_low, t_high)
-
+    """
     ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
     ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
 
@@ -2494,9 +2544,10 @@ def get_hist_perm_test_grid():
 
 
 # TODO: computation of observed, sampled and p-value should be outside of plotting functions
-def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions):
+def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions, ax0=None, ax1=None):
     # TODO: why plot rec-wise and compute statistics subj-wise?
-    ax0, ax1 = get_hist_perm_test_grid()
+    if ax0 is None and ax1 is None:
+        ax0, ax1 = get_hist_perm_test_grid()
     ax0 = plot_age_gap_hist(this_preds, bin_width=bin_width, ax=ax0)
     this_preds = get_subject_wise_df(this_preds)
     observed, sampled = age_gap_diff_permutations(this_preds, n_repetitions, subject_wise=True)
@@ -2523,7 +2574,7 @@ def plot_violin_new(observed, sampled, central_value, ax1):
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
     p = compute_p_value_from_sampled_and_observed(sampled, observed)
-    print(f"{p:.2E}")
+    print(f"p={p:.2E}")
     ax1.legend([
         f'Observed ({observed:.2f})',#, p$\leq${p:.2E})',  # TODO: add back p-value?
         'Sampled',
@@ -2780,6 +2831,8 @@ def read_result(
         cv_result = []
         for valid_set_i in folds:
             this_exp_dir = os.path.join(exp_dir, valid_set_i)
+            if not os.path.isdir(this_exp_dir):
+                continue
             try:
                 this_result = _read_result(this_exp_dir, result)
                 cv_result.append(this_result)
@@ -2789,60 +2842,6 @@ def read_result(
         exp_results.append(cv_result)
     exp_results = pd.concat(exp_results).sort_values(['seed', 'valid_set_i'])
     return exp_results
-
-"""
-def _read_result(
-    exp_dir,
-    result,
-):
-    config_path = os.path.join(exp_dir, 'config.csv')
-    config = pd.read_csv(config_path, index_col=0).T
-    if result == 'history':
-        hist_path = os.path.join(exp_dir, 'history.csv')
-        this_result = pd.read_csv(hist_path, index_col=0)
-    elif result == 'score':
-        score_path = os.path.join(exp_dir, 'train_end_scores.csv')
-        this_result = pd.read_csv(score_path, index_col=0)
-    elif result == 'preds':
-        try:
-            subset = 'valid'
-            pred_path = os.path.join(exp_dir, 'preds', f'train_end_{subset}_preds.csv')
-            preds1 = pd.read_csv(pred_path, index_col=0)
-        except:
-            subset = 'eval'
-            pred_path = os.path.join(exp_dir, 'preds', f'train_end_{subset}_preds.csv')
-            preds1 = pd.read_csv(pred_path, index_col=0)
-        preds1['subset'] = subset
-        this_result = preds1
-        try:
-            pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_not_{config.squeeze()["subset"]}_preds.csv')
-            preds2 = pd.read_csv(pred_path, index_col=0)
-            preds2['subset'] = 'valid_rest'
-            this_result = pd.concat([this_result, preds2])
-        except:
-            try:
-                pred_path = os.path.join(exp_dir, 'preds', f'train_end_valid_rest_preds.csv')
-                preds2 = pd.read_csv(pred_path, index_col=0)
-                preds2['subset'] = 'valid_rest'
-                this_result = pd.concat([this_result, preds2])
-            except:
-                logger.warning('valid_rest could not be read')
-        # TODO: add longitudinal preds
-        this_result['gap'] = this_result.y_true - this_result.y_pred
-    elif result == 'train_repds':
-        pred_path = os.path.join(exp_dir, 'preds', f'train_end_train_preds.csv')
-        this_result = pd.read_csv(pred_path, index_col=0)
-        this_result['subset'] = 'train'
-        logger.warning('untested')
-    elif result == 'config':
-        this_result = config
-    else:
-        raise ValueError
-    if result != 'config':
-        this_result['seed'] = int(config['seed'])
-        this_result['valid_set_i'] = int(config['valid_set_i'])
-    return this_result
-"""
 
 
 def _read_result(
