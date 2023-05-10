@@ -1890,7 +1890,7 @@ def _create_final_scores(
                 # mean absolute percentage error has downsides
                 # https://stats.stackexchange.com/a/299713
                 # use weighted mean absolute percentage error instead
-                ('wmape', lambda y_true, y_pred: np.sum(np.abs(y_pred-y_true))/np.sum(np.abs(y_true))),
+                ('wmape', lambda y_true, y_pred: np.sum(np.abs(y_true - y_pred))/np.sum(np.abs(y_true))),
                 ('mdape', lambda y_true, y_pred: np.nanmedian(np.abs(np.abs(y_true - y_pred) / y_true))), 
             ]
         else:
@@ -2133,28 +2133,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     # overwrite 'observation' with just 1 threshold
     observed_score = balanced_accuracy_score(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
-    
-    """
-    central_value = 50
-    ax0.set_title('')
-    ax1.axhline(observed_score, c='lightgreen')
-    sns.violinplot(y=sampled,
-    #sns.violinplot(y=np.abs(np.array(sampled)-central_value)+central_value,
-                   ax=ax1, inner='quartile', color='g')
-    ax1.set_ylabel('Accuracy [%]')
-    if (np.abs(sampled) < central_value).any():
-        ylim = np.max(np.abs(np.array(ax1.get_ylim())-central_value))
-        ax1.set_ylim(central_value-ylim, central_value+ylim)
-    # set violin alpha = .5
-    # https://github.com/mwaskom/seaborn/issues/622
-    from matplotlib.collections import PolyCollection
-    for art in ax1.get_children():
-        if isinstance(art, PolyCollection):
-            art.set_alpha(.5)
-    # TODO: compute p-value
-    p = compute_p_value_from_sampled_and_observed(sampled, observed)
-    ax1.legend([f'Observed ({observed_score:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', bbox_to_anchor=(.5, -.2))
-    """
+
     ax1 = plot_violin_new(observed, sampled, central_value=50, ax1=ax1)
     ax1.set_ylabel('Accuracy [%]')
     return ax0
@@ -2208,80 +2187,6 @@ def plot_age_gap_hist_with_threshs(
     """
     return ax, t_low, t_high
 
-"""
-# TODO: use plot_age_gap_hist and add threshs
-def plot_age_gap_hist_with_threshs_old(
-    g1,
-    bin_width=2,
-    ax=None,
-    t_low=None,
-    t_high=None,
-):
-    g1['gap'] = g1.y_pred - g1.y_true
-    if t_low is None and t_high is None:
-        t_low, t_high = find_threshs(g1)
-        print('found thresholds', t_low, t_high)
-    else:
-        print('given thresholds', t_low, t_high)
-
-    #g1['Pathological'] = g1.pathological == 1
-    
-    bins = np.concatenate([
-        np.arange(0, - g1.gap.min() + bin_width, bin_width, dtype=int)[::-1]*-1,
-        np.arange(bin_width, g1.gap.max() + bin_width, bin_width, dtype=int)
-    ])
-    
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
-    g1_patho = g1[g1.pathological == 1]
-    g1_non_patho = g1[g1.pathological == 0]
-    
-    #ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, label='False')
-    #ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, label='True')
-    
-    ax = sns.histplot(data=g1_non_patho, x='gap', color='b', ax=ax, bins=bins, kde=True, label='False')
-    ax = sns.histplot(data=g1_patho, x='gap', color='r', ax=ax, bins=bins, kde=True, label='True')
-    
-    patho_mean = g1[g1['pathological'] == True]['gap'].mean()
-    patho_std = g1[g1['pathological'] == True]['gap'].std()
-    non_patho_mean = g1[g1['pathological'] == False]['gap'].mean()
-    non_patho_std = g1[g1['pathological'] == False]['gap'].std()
-    ax.axvline(non_patho_mean, c='cyan', label=f'False mean ({non_patho_mean:.2f} $\pm {non_patho_std:.2f}$)')
-    ax.axvline(patho_mean, c='magenta', label=f'True mean ({patho_mean:.2f} $\pm {patho_std:.2f}$)')
-    
-    ax.set_xlabel('Decoded Age – Chronological Age [years]')
-
-    ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
-    ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
-
-    ax.legend(title='Pathological', loc='upper left')
-    
-    max_abs_v = g1.gap.abs().max()*1.1
-    ax.set_xlim(-max_abs_v, max_abs_v)
-
-    ax.axvspan(
-        t_high, ax.get_xlim()[1],
-        facecolor='orange', alpha=.1, zorder=-100,
-    )
-    ax.axvspan(
-        ax.get_xlim()[0], t_low, 
-        facecolor='orange', alpha=.1, zorder=-100,
-    )
-    ax.axvspan(
-        t_low, t_high,
-        facecolor='teal', alpha=.1, zorder=-100,
-    )
-
-    # in the center of sections add text what it means
-    x1 = t_low + (ax.get_xlim()[0] - t_low) / 2
-    x2 = t_high + (ax.get_xlim()[1] - t_high) / 2
-    x3 = t_low + (t_high - t_low) / 2
-    y = ax.get_ylim()[0] + np.diff(ax.get_ylim())/1.25
-    #ax.text(x1, y, "True", ha='right', weight='bold', c='r')
-    #ax.text(x3, y, "False", ha='center', weight='bold', c='b')
-    #ax.text(x2, y, "True", ha='left', weight='bold', c='r')
-    return ax, t_low, t_high
-"""
 
 def create_grid(hist_max_count, max_age):
     #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
@@ -2667,6 +2572,7 @@ def compute_p_value_from_sampled_and_observed(sampled, observed):
     #    ((sampled >= observed).sum() / len(sampled)),
     #    ((sampled <= observed).sum() / len(sampled)),
     #])
+    # TODO: add one-sided and two-sided option
     """
     sampled = np.array(sampled)
     p = np.min([(sampled >= observed).mean(), (sampled <= observed).mean()])
@@ -2677,51 +2583,12 @@ def compute_p_value_from_sampled_and_observed(sampled, observed):
     return p
 
 
-"""
-# TODO: broken
-def plot_violin(y, sampled_y, xlabel, center_value=0, ax=None):
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
-        ax = sns.violinplot(y=sampled_y, kde=True, color='g', inner="quartile")
-    ax.axhline(y, c='lightgreen')
-    # set violin alpha = .5
-    # https://github.com/mwaskom/seaborn/issues/622
-    from matplotlib.collections import PolyCollection
-    for art in ax.get_children():
-        if isinstance(art, PolyCollection):
-            art.set_alpha(.5)
-    ax.set_xlabel(xlabel)
-    ax.legend(['Observed', 'Sampled'])#, title='Mean Chronological Age - Predicted Age')
-    max_abs_lim = max([abs(center_value - i) for i in ax.get_xlim()])
-    ax.set_ylim(center_value-max_abs_lim, center_value+max_abs_lim)
-    
-    p = compute_p_value_from_sampled_and_observed(sampled_y, y)
-    ax.text(y, ax.get_ylim()[1], f'{y:.2f} (p={p:.2E})',
-            ha='center', va='bottom', fontweight='bold')
-    return ax
-"""
-
-
 def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     d, n_repetitions):
     ax0, ax1 = get_hist_perm_test_grid()
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0)
-
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
-    # TODO: use plot violin
-    ax1.axhline(observed, c='lightgreen')
-    ax1 = sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
-    ylim = np.max(np.abs(np.array(ax1.get_ylim())))
-    ax1.set_ylim(-ylim, ylim)
-    # set violin alpha = .5
-    # https://github.com/mwaskom/seaborn/issues/622
-    from matplotlib.collections import PolyCollection
-    for art in ax1.get_children():
-        if isinstance(art, PolyCollection):
-            art.set_alpha(.5)
-    p = compute_p_value_from_sampled_and_observed(sampled, observed)
-    ax1.legend([f'Observed ({observed:.2f}, p$\leq${p:.2E})', 'Sampled'], loc='lower center', 
-               bbox_to_anchor=(.5, -.2))
+    ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
     ax1.set_ylabel('Mean Difference [years]')    
     return ax0
     
@@ -2753,7 +2620,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
             label=f'True mean ({mean_patho_gap:.2f} $\pm {std_patho_gap:.2f}$)',
         )
     ax.legend()
-    ax.set_xlabel('Mean Absolute Running Difference of Mean-corrected Gaps [years]')
+    ax.set_xlabel('Mean Absolute Running Difference of Gaps [years]')
     return ax
 
 
@@ -2767,8 +2634,8 @@ def mean_abs_running_diff_of_mean_corrected_gaps(rec_preds):
     # TODO: does not take into account different seeds / runs?!
     d = []
     for i, ((subject, pathological), g) in enumerate(rec_preds.groupby(['subject', 'pathological'])):
-        g['y_true'] -= g['y_true'].mean()
-        g['y_pred'] -= g['y_pred'].mean()
+        #g['y_true'] -= g['y_true'].mean()  # does not make a difference
+        #g['y_pred'] -= g['y_pred'].mean()  # does not make a difference
         mean = (g.y_pred - g.y_true).diff().abs().mean()
         d.append({
             'mean': mean,  # TODO: diff could be a problem in y_pred 
@@ -3203,15 +3070,17 @@ def extract_longitudinal_dataset(description, kind, load):
         return ds
     
     
-def fit_deconfound_model(y_true, y_pred, kind):
-    if kind == 'quadratic':
-        model = np.poly1d(np.polyfit(y_true, y_pred - y_true, 2))
-    elif kind == 'linear':
-        m, b = np.polyfit(y_true, y_pred - y_true, 1)
-        model = lambda y_true: -(m * y_true + b)
-    else:
-        raise ValueError
-    return model
+def fit_deconfound_model(y_true, y_pred):
+    coefs = {}
+    for kind in ['linear', 'quadratic']:
+        if kind == 'quadratic':
+            model = np.poly1d(np.polyfit(y_true, y_pred - y_true, 2))
+            coefs[kind] = tuple(list(model.coefficients))
+        elif kind == 'linear':
+            m, b = np.polyfit(y_true, y_pred - y_true, 1)
+            #model = lambda y_true: -(m * y_true + b)
+            coefs[kind] = (m, b)
+    return coefs
 
 
 def _deconfound(y_true, y_pred, kind):
