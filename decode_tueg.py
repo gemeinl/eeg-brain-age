@@ -2116,7 +2116,6 @@ def find_threshs(df):
     return (t_2, t_1) if t_2 < t_1 else (t_1, t_2)
 
 
-# TODO:----
 def get_perm_test_hist_perm_test_grid():
     fig, ax = plt.subplots(1, 1, figsize=(18,4))
     plt.subplots_adjust(wspace=1)
@@ -2159,7 +2158,6 @@ def plot_permutation_test_and_age_gap_hist_with_thresh_and_permutation_test(
         ax1=ax1,
     )
     return ax3
-# TODO:----
 
 
 def plot_age_gap_hist_with_thresh_and_permutation_test(
@@ -2312,10 +2310,11 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
 #     cbar_ax.set_yticks(list(cbar_ax.get_yticks())[:-1] + [cbar_ax.get_ylim()[1]])
     # avoid floating point number labels in discrete colorbar
     cbar_ax.set_yticks(cbar_ax.get_yticks()[:-1])
-    cbar_ax.set_yticklabels([
+    ticklabels = [
         '' if '.' in t._text and t._text.split('.')[1] != '0' else str(int(float(t._text)))
         for t in cbar_ax.get_yticklabels()
-    ])
+    ]
+    cbar_ax.set_yticklabels(ticklabels)
     cbar_ax.set_ylabel('Count')
 
     ax.scatter(
@@ -2373,7 +2372,12 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
         mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
         patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years mae)', alpha=.5))
     else:
-        ax0.set_yticklabels([])
+        # when only one class, always plot into first square, delete second
+        # only non-pathologicals -> 1, 4, 6 empty
+        # pathologicals -> 0, 3, 5 empty
+        ax1 = ax0
+        ax4 = ax3
+        ax6 = ax5
     if not df_p.empty:
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
         patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
@@ -2470,6 +2474,14 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     for x in [ax3, ax4]:
         x.text(x.get_xlim()[0], x.get_ylim()[1], 'Overestimated', ha='left', va='top', weight='bold')
         x.text(x.get_xlim()[1], x.get_ylim()[0], 'Underestimated', ha='right', va='bottom', weight='bold')
+    
+    # delete empty axes. always the same, since swapping axes above when only one class present
+    if df_p.empty or df_np.empty:
+        fig.delaxes(fig.axes[6])
+        fig.delaxes(fig.axes[4])
+        fig.delaxes(fig.axes[1])
+        # TODO: remove axis size?
+        # ax.get_figure().set_size_inches(9,18)
     return ax0
 
 
