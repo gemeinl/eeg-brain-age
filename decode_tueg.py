@@ -2647,9 +2647,9 @@ def compute_p_value_from_sampled_and_observed(sampled, observed):
 
 
 def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
-    d, n_repetitions):
+    d, n_repetitions, bin_width):
     ax0, ax1 = get_hist_perm_test_grid()
-    ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0)
+    ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0, bin_width=bin_width)
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
     ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
     ax1.set_ylabel('Mean Difference [years]')    
