@@ -2096,7 +2096,9 @@ def plot_learning(
     return ax
 
 
-def find_threshs(df):
+# TODO: make independet of df
+# TODO: make also only one thresh
+def find_threshs(df):  # gaps, pathological
     gaps = df.y_pred - df.y_true
     sorted_gaps = gaps.sort_values().values
 
