@@ -254,8 +254,9 @@ def decode_tueg(
         batch_size,
     )
     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    #with open('/home/jovyan/eval.pkl', 'wb') as f:
+    #with open('/home/jovyan/eval_eval_pre_win.pkl', 'wb') as f:
     #    pickle.dump(tuabn_valid, f)
+    #1/0
     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     logger.info(title)
     logger.info(f'starting training')
@@ -2326,6 +2327,7 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
 
     # TODO: double and triple check why y_true and y_pred x and y here need to be swapped
     m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
+    print(f'm{m:.2f}, b {b:.2f}')
     ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, #linestyle='--',
             c='magenta' if cmap == 'Reds' else 'cyan')
 
