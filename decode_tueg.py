@@ -2185,7 +2185,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
 
     ax1 = plot_violin_new(observed, sampled, central_value=50, ax1=ax1)
-    ax1.set_ylabel('Accuracy [%]')
+    ax1.set_ylabel('Balanced Accuracy [%]')
     return ax0
 
 
@@ -2734,7 +2734,7 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     sns.histplot(
         y=male_normal_df["age"], bins=bins, alpha=alpha, color="g",
         orientation="horizontal", ax=ax1, kde=True,
-        label="Non-pathological ({:.1f}%)".format(
+        label="Non-Pathological ({:.1f}%)".format(
             len(male_normal_df) / len(male_df) * 100) if show_pathology_legend else None,
     )
     ax1.axhline(male_normal_df["age"].mean(), color='g')
@@ -2750,7 +2750,7 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     ax1.axhline(np.mean(male_df["age"]), color="black",
                 # label="mean age {:.2f} $\pm$ {:.2f}".format(
                 #     np.mean(male_df["age"]), np.std(male_df["age"])))
-                label="Mean age {:.1f} ($\pm$ {:.1f})"
+                label="Mean Age {:.1f} ($\pm$ {:.1f})"
                 .format(np.mean(male_df["age"]), np.std(male_df["age"])))
     ax1.barh(np.mean(male_df["age"]), height=2 * np.std(male_df["age"]),
              width=ylim, color="black", alpha=.25)
@@ -2760,9 +2760,9 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     # order = [2, 1, 0]
     # plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
 
-    ax1.legend(fontsize=fs, loc="lower left")
+    ax1.legend(fontsize=fs, loc="lower left", )#bbox_to_anchor=(0, 0.01))  # required for LT dataset
     ax1.set_title(f"Male ({100 * float(len(male_df) / len(df)):.1f}%)"
-                  f"\nn_recordings: {len(male_df)}\nn_subjects: {male_df['subject'].nunique()}",
+                  f"\n# Recordings: {len(male_df)}\n# Subjects: {male_df['subject'].nunique()}",
                   fontsize=fs, loc="left", y=.90, x=.05)
     ax1.invert_xaxis()
 
@@ -2770,7 +2770,7 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     sns.histplot(
         y=female_normal_df["age"], bins=bins, alpha=alpha, color="y",
         orientation="horizontal", ax=ax2, kde=True, line_kws= {'linestyle': '--'}, #kde_kws={'bw_adjust': 3},
-        label="Non-pathological ({:.1f}%)".format(
+        label="Non-Pathological ({:.1f}%)".format(
             len(female_normal_df) / len(female_df) * 100) if show_pathology_legend else None,
     )
     ax2.axhline(female_normal_df["age"].mean(), color='y', linestyle="--")
@@ -2786,16 +2786,16 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     ax2.axhline(np.mean(female_df["age"]), color="black", linestyle="--",
                 # label="mean age {:.2f} $\pm$ {:.2f}"
                 # .format(np.mean(female_df["age"]), np.std(female_df["age"])))
-                label="Mean age {:.1f} ($\pm$ {:.1f})"
+                label="Mean Age {:.1f} ($\pm$ {:.1f})"
                 .format(np.mean(female_df["age"]), np.std(female_df["age"])))
     ax2.barh(np.mean(female_df["age"]), height=2 * np.std(female_df["age"]),
              width=ylim, color="black",
              alpha=.25)
-    ax2.legend(fontsize=fs, loc="lower right")
+    ax2.legend(fontsize=fs, loc="lower right",)# bbox_to_anchor=(1, 0.01))  # required for LT dataset
     ax2.set_xlim(0, ylim)
     # ax1.invert_yaxis()
     ax2.set_title(f"Female ({100 * len(female_df) / len(df):.1f}%)"
-                  f"\nn_recordings: {len(female_df)}\nn_subjects: {female_df['subject'].nunique()}",
+                  f"\n# Recordings: {len(female_df)}\n# Subjects: {female_df['subject'].nunique()}",
                   fontsize=fs, loc="right", y=.90, x=.95)  # , y=.005)
 
     plt.ylim(0, 100)
@@ -2826,12 +2826,14 @@ def save_fig(
     out_dir, 
     title,
 ):
-    for file_type in ['pdf', 'png', 'jpg']:
-        out_path = os.path.join(out_dir, 'plots', f'{file_type}')
+    for file_type in ['pdf', 'png', 'eps']:
+        #out_path = os.path.join(out_dir, f'{file_type}')
+        out_path = out_dir
         makedir(out_path)
         fig.savefig(
             os.path.join(out_path, f'{title}.{file_type}'),
             bbox_inches='tight',
+            dpi=300,
         )
 
 
@@ -2988,12 +2990,12 @@ def plot_n_recs_per_subject_and_rec_intervals(
         ax=ax,
     )
     ax.set_ylim(2, 6)
-    ax.set_ylabel('Number of recordings per subject')
-    ax.set_xlabel('Longitudinal Dataset')
+    ax.set_ylabel('Number Of Recordings Per Subject')
+    ax.set_xlabel('Longitudinal')
     means = n_recs_per_subject.groupby(x).mean()
     stds = n_recs_per_subject.groupby(x).std()
-    mean = means.loc['Non-pathological', y]
-    std = stds.loc['Non-pathological', y]
+    mean = means.loc['Non-Pathological', y]
+    std = stds.loc['Non-Pathological', y]
     ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
     mean = means.loc['Pathological', y]
     std = stds.loc['Pathological', y]
@@ -3015,10 +3017,11 @@ def plot_n_recs_per_subject_and_rec_intervals(
         palette=['b', 'r', 'g'],
         ax=ax,
     )
+    ax.set_xlabel('Longitudinal')
     means = df.groupby(x).mean()
     stds = df.groupby(x).std()
-    mean = means.loc['Non-pathological', y]
-    std = stds.loc['Non-pathological', y]
+    mean = means.loc['Non-Pathological', y]
+    std = stds.loc['Non-Pathological', y]
     ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
     mean = means.loc['Pathological', y]
     std = stds.loc['Pathological', y]
