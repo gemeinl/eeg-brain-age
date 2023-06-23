@@ -826,7 +826,7 @@ def _plot_age_source_comparison(df, age1, age2):
     ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
     ax.ax_joint.plot([0, 100], [0, 100], c='k', linewidth=1)
     mae = mean_absolute_error(df_[age1], df_[age2])
-    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years mae', y=1.01)
+    ax.ax_joint.get_figure().suptitle(f'{mae:.2f} years MAE', y=1.01)
     ax.ax_joint.legend(title='Pathological')
     mini = min(df_[age1].min(), df_[age2].min()) - offset
     maxi = max(df_[age1].max(), df_[age2].max()) + offset
@@ -2185,7 +2185,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
 
     ax1 = plot_violin_new(observed, sampled, central_value=50, ax1=ax1)
-    ax1.set_ylabel('Balanced Accuracy [%]')
+    ax1.set_ylabel('Balanced Accuracy\n[%]')
     return ax0
 
 
@@ -2374,7 +2374,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     patches = []
     if not df_np.empty:
         mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
-        patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years mae)', alpha=.5))
+        patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years MAE)', alpha=.5))
     else:
         # when only one class, always plot into first square, delete second
         # only non-pathologicals -> 1, 4, 6 empty
@@ -2384,7 +2384,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
         ax6 = ax5
     if not df_p.empty:
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
-        patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years mae)', alpha=.5))
+        patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years MAE)', alpha=.5))
     else:
         ax1.set_yticklabels([]) 
     ax7.legend(handles=patches, title='Pathological')
@@ -2550,8 +2550,8 @@ def plot_age_gap_hist(
     return ax
 
 
-def get_hist_perm_test_grid():
-    fig, ax = plt.subplots(1, 1, figsize=(18,4))
+def get_hist_perm_test_grid(height=2.5):
+    fig, ax = plt.subplots(1, 1, figsize=(15,height))
     ax0 = plt.subplot2grid((3, 20), (0, 0), rowspan=3, colspan=17, fig=fig)
     ax1 = plt.subplot2grid((3, 20), (0, 17), rowspan=3, colspan=3, fig=fig)
     ax1.yaxis.tick_right()
@@ -2571,7 +2571,7 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions,
     ax0.set_title('')
     #ax1 = plot_violin_new(np.abs(observed), np.abs(sampled), central_value=0, ax1=ax1)
     ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
-    ax1.set_ylabel('Mean Gap Difference [years]')
+    ax1.set_ylabel('Mean Gap Difference\n[years]')
     return ax0
 
 
@@ -2594,7 +2594,7 @@ def plot_violin_new(observed, sampled, central_value, ax1):
     ax1.legend([
         f'Observed ({observed:.2f})',#, p$\leq${p:.2E})',  # TODO: add back p-value?
         'Sampled',
-    ], loc='lower center', bbox_to_anchor=(.5, -.2))
+    ], loc='lower center', bbox_to_anchor=(.5, -.3))
     return ax1
 
 
@@ -2654,9 +2654,10 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     d, n_repetitions, bin_width):
     ax0, ax1 = get_hist_perm_test_grid()
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0, bin_width=bin_width)
+    ax0.legend(ncol=2)
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
     ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
-    ax1.set_ylabel('Mean Difference [years]')    
+    ax1.set_ylabel('Mean Difference\n[years]')    
     return ax0
     
 
