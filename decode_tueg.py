@@ -2121,7 +2121,7 @@ def find_threshs(df):  # gaps, pathological
 
 def get_perm_test_hist_perm_test_grid():
     fig, ax = plt.subplots(1, 1, figsize=(18,4))
-    plt.subplots_adjust(wspace=1)
+    plt.subplots_adjust(wspace=1.8)
     # hist
     ax0 = plt.subplot2grid((3, 23), (0, 3), rowspan=3, colspan=17, fig=fig)
     # perm test1
@@ -2131,7 +2131,7 @@ def get_perm_test_hist_perm_test_grid():
     ax1.yaxis.tick_right()
     ax1.yaxis.set_label_position("right")
     ax0.yaxis.tick_right()
-    #ax0.tick_params(axis="y",direction="in", pad=-12)
+    #ax0.tick_params(axis="y", rotation=90)#direction="in", pad=-12)
     return ax0, ax1, ax2
 
 
@@ -2189,6 +2189,17 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     return ax0
 
 
+def plot_age_hist_with_thresh(
+    df,
+    thresh,
+    bin_width,
+    ax=None,
+):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(2.5, 14))
+    return ax
+
+
 def plot_age_gap_hist_with_threshs(
     g1,
     t_low,
@@ -2205,10 +2216,11 @@ def plot_age_gap_hist_with_threshs(
     else:
         print('given thresholds', t_low, t_high)
     """
-    ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
-    ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
 
-    ax.legend(title='Pathological', loc='upper left')
+    ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
+    ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
+
+    ax.legend(title='Pathological', loc='best', ncol=1)
     
     max_abs_v = g1.gap.abs().max()*1.1
     ax.set_xlim(-max_abs_v, max_abs_v)
@@ -2241,7 +2253,7 @@ def plot_age_gap_hist_with_threshs(
 
 def create_grid(hist_max_count, max_age):
     #https://stackoverflow.com/questions/10388462/matplotlib-different-size-subplots
-    fig, ax = plt.subplots(1, 1, figsize=(18,18))
+    fig, ax = plt.subplots(1, 1, figsize=(14,14)) # 18,18
     gridx = 14
     gridy = 28
     ax0 = plt.subplot2grid((gridx, gridy), (0, 4), rowspan=2, colspan=10)
@@ -2293,6 +2305,9 @@ def create_grid(hist_max_count, max_age):
     return fig, ax0, ax1, ax2, ax3, ax4, ax5, ax6, ax7
 
 
+import matplotlib.lines as mlines
+
+
 def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
     from matplotlib.colors import LinearSegmentedColormap
     # https://stackoverflow.com/questions/67605719/displaying-lowest-values-as-white
@@ -2313,9 +2328,15 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
 #     cbar_ax.set_yticks(list(cbar_ax.get_yticks())[:-1] + [cbar_ax.get_ylim()[1]])
     # avoid floating point number labels in discrete colorbar
     cbar_ax.set_yticks(cbar_ax.get_yticks()[:-1])
+    """
     ticklabels = [
         '' if '.' in t._text and t._text.split('.')[1] != '0' else str(int(float(t._text)))
         for t in cbar_ax.get_yticklabels()
+    ]
+    """
+    ticklabels = [
+        int(t) if t.is_integer() else ''
+        for t in cbar_ax.get_yticks()
     ]
     cbar_ax.set_yticklabels(ticklabels)
     cbar_ax.set_ylabel('Count')
@@ -2326,10 +2347,13 @@ def plot_heatmap(H, df, bin_size, max_age, cmap, cbar_ax, vmax, ax=None):
         s=250, edgecolor='k', zorder=3)
 
     # TODO: double and triple check why y_true and y_pred x and y here need to be swapped
-    m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
-    print(f'm{m:.2f}, b {b:.2f}')
-    ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, #linestyle='--',
-            c='magenta' if cmap == 'Reds' else 'cyan')
+    #m, b = np.polyfit(df.y_true.to_numpy('int')/bin_size, df.y_pred.to_numpy('float')/bin_size, 1)
+    #print(f'm{m:.2f}, b {b:.2f}')
+    #ax.plot(df.y_true/bin_size, m*df.y_true/bin_size + b, linewidth=1, #linestyle='--',
+    #        c='magenta' if cmap == 'Reds' else 'cyan')
+    sns.regplot(
+        x=df.y_true/bin_size, y=df.y_pred/bin_size,
+        scatter=False, color='magenta' if cmap == 'Reds' else 'cyan', ax=ax, ci=0, line_kws={'linewidth': 1})
 
     # add error to trendline
     # does not really make sense
@@ -2374,7 +2398,11 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     patches = []
     if not df_np.empty:
         mae_non_patho = mean_absolute_error(df_np.y_true, df_np.y_pred)
-        patches.append(mpatches.Patch(color='b', label=f'False (n={len(df_np)})\n({mae_non_patho:.2f} years MAE)', alpha=.5))
+        label = f'False (n={len(df_np)})'
+        #label += f'\n({mae_non_patho:.2f} years MAE)'
+        patches.append(mpatches.Patch(color='b', alpha=.5, label=label))
+        patches.append(mlines.Line2D([], [], color='cyan', marker='*', linestyle='None',
+                       markersize=10, label=f'x={df_np.y_true.mean():.2f}, y={df_np.y_pred.mean():.2f}'))
     else:
         # when only one class, always plot into first square, delete second
         # only non-pathologicals -> 1, 4, 6 empty
@@ -2384,17 +2412,22 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
         ax6 = ax5
     if not df_p.empty:
         mae_patho = mean_absolute_error(df_p.y_true, df_p.y_pred)
-        patches.append(mpatches.Patch(color='r', label=f'True (n={len(df_p)})\n({mae_patho:.2f} years MAE)', alpha=.5))
+        label = f'True (n={len(df_p)})'
+        #label += f'\n({mae_patho:.2f} years MAE)'
+        patches.append(mpatches.Patch(color='r', alpha=.5, label=label))
+        patches.append(mlines.Line2D([], [], color='magenta', marker='*', linestyle='None',
+                       markersize=10, label=f'x={df_p.y_true.mean():.2f}, y={df_p.y_pred.mean():.2f}'))
     else:
         ax1.set_yticklabels([]) 
+
     ax7.legend(handles=patches, title='Pathological')
     
     # ax0 and ax1 true age hists
     bins = np.arange(0, 100, bin_size)
     sns.histplot(df_np.y_true, ax=ax0, color='b', kde=True, bins=bins)
-    ax0.axvline(df_np.y_true.mean(), c='cyan')
+    ax0.axvline(df_np.y_true.mean(), c='cyan', linestyle=':')
     sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
-    ax1.axvline(df_p.y_true.mean(), c='magenta')
+    ax1.axvline(df_p.y_true.mean(), c='magenta', linestyle=':')
 
     #get ticks of ax0 and ax1, get the one with more and use for both
     if not df_np.empty and not df_p.empty:
@@ -2407,8 +2440,8 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     # ax2 decoded age hist
     sns.histplot(data=df_np, y='y_pred', ax=ax2, color='b', kde=True, bins=bins)
     sns.histplot(data=df_p, y='y_pred', ax=ax2, color='r', kde=True, bins=bins)
-    ax2.axhline(df_np.y_pred.mean(), c='cyan')
-    ax2.axhline(df_p.y_pred.mean(), c='magenta')
+    ax2.axhline(df_np.y_pred.mean(), c='cyan', linestyle='--')#, label=f'{df_np.y_pred.mean():.2f} years')
+    ax2.axhline(df_p.y_pred.mean(), c='magenta', linestyle='--')
     #ax2.set_xticks(ax0.get_yticks()[:-1])
     ax2.set_yticks(np.linspace(0, 100, 11, dtype='int'))
     ax2.legend()
@@ -2445,6 +2478,7 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     for i, (H, this_df, cmap, cbar_ax) in enumerate(zip(Hs, dfs, ['Blues', 'Reds'], [ax5, ax6])):
         if this_df.empty:
             continue
+        #print(cmap, 'true', this_df.y_true.mean(), 'pred', this_df.y_pred.mean())
         ax = plot_heatmap(
             H,
             this_df,
@@ -2455,6 +2489,14 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
             vmax=Hmax,
             cbar_ax=cbar_ax,
         )
+        #ax.axhline(this_df.y_pred.mean()/bin_size, c='cyan' if cmap == 'Blues' else 'magenta', linestyle='--')
+        #ax.axvline(this_df.y_true.mean()/bin_size, c='cyan'if cmap == 'Blues' else 'magenta')
+
+        #ax.scatter(
+        #    this_df.y_true.mean()/bin_size, this_df.y_pred.mean()/bin_size, 
+        #    marker='*', c='magenta' if cmap == 'Reds' else 'cyan',
+        #    s=250, edgecolor='k', zorder=3, label=f'({this_df.y_true.mean():.2f}, {this_df.y_pred.mean():.2f})')
+        
 #        mae = mean_absolute_error(this_df.y_true, this_df.y_pred)
         # add error to diagonal
 #         sns.lineplot(x=[0, 100-mae/bin_size], y=[mae/bin_size, 100], ax=axs[i], c='k', linewidth=1, linestyle='--')
@@ -2546,12 +2588,12 @@ def plot_age_gap_hist(
     ax.set_xlim(-max_abs_gap, max_abs_gap)
     ax.set_xlabel('Decoded Age – Chronological Age [years]')
     #ax.set_title(f'Brain age gap')
-    ax.legend(title='Pathological', loc='upper left')
+    ax.legend(title='Pathological', loc='best', ncol=1)
     return ax
 
 
 def get_hist_perm_test_grid(height=2.5):
-    fig, ax = plt.subplots(1, 1, figsize=(15,height))
+    fig, ax = plt.subplots(1, 1, figsize=(14,height))
     ax0 = plt.subplot2grid((3, 20), (0, 0), rowspan=3, colspan=17, fig=fig)
     ax1 = plt.subplot2grid((3, 20), (0, 17), rowspan=3, colspan=3, fig=fig)
     ax1.yaxis.tick_right()
@@ -2578,7 +2620,17 @@ def plot_age_gap_hist_and_permutation_test(this_preds, bin_width, n_repetitions,
 # TODO: use everywhere, add central value, add p-value
 def plot_violin_new(observed, sampled, central_value, ax1):
     ax1.axhline(observed, c='lightgreen')
-    sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
+    #sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
+    sns.violinplot(y=sampled, ax=ax1, inner=None, color='g')
+    sns.boxplot(
+        y=sampled, showfliers=False, showbox=False, whis=[2.5,97.5], ax=ax1,
+        **{
+            'boxprops':{'facecolor':'none', 'edgecolor':'g'},
+            'medianprops':{'color':'g'},
+            'whiskerprops':{'color':'g'},
+            'capprops':{'color':'g'}
+        }
+    )
     if (np.array(sampled) < central_value).any():
         # TODO: fix symmetric spread 
         ylim = np.max(np.abs(np.array(ax1.get_ylim())))
@@ -2598,10 +2650,10 @@ def plot_violin_new(observed, sampled, central_value, ax1):
     return ax1
 
 
-def accuracy_perumtations(df, n_repetitions):
+def accuracy_perumtations(df, n_repetitions, indicator='gap'):
     accs = []
-    for thresh in df.gap:
-        acc = balanced_accuracy_score(df.pathological, df.gap > thresh) * 100
+    for thresh in df[indicator]:
+        acc = balanced_accuracy_score(df.pathological, df[indicator] > thresh) * 100
         accs.append(acc)
     orig_acc = max(accs)
     
@@ -2654,7 +2706,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     d, n_repetitions, bin_width):
     ax0, ax1 = get_hist_perm_test_grid()
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0, bin_width=bin_width)
-    ax0.legend(ncol=2)
+    ax0.legend(ncol=1)
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
     ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
     ax1.set_ylabel('Mean Difference\n[years]')    
@@ -2666,7 +2718,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
         fig, ax = plt.subplots(1, 1, figsize=(12,1.5))
     #cs = {0: 'cyan', 1: 'magenta'}
     df[df['mean'] > cutoff_value] = cutoff_value
-    bins = list(range(0, cutoff_value, bin_width))
+    bins = list(range(0, cutoff_value, bin_width))  # -cutoff_value
     
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
@@ -2761,7 +2813,7 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     # order = [2, 1, 0]
     # plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
 
-    ax1.legend(fontsize=fs, loc="lower left", )#bbox_to_anchor=(0, 0.01))  # required for LT dataset
+    ax1.legend(fontsize=fs, loc="lower left", bbox_to_anchor=(0, 0.01))  # required for LT dataset
     ax1.set_title(f"Male ({100 * float(len(male_df) / len(df)):.1f}%)"
                   f"\n# Recordings: {len(male_df)}\n# Subjects: {male_df['subject'].nunique()}",
                   fontsize=fs, loc="left", y=.90, x=.05)
@@ -2792,7 +2844,7 @@ def age_pyramid(df_of_ages_genders_and_pathology_status, train_or_eval, alpha=.5
     ax2.barh(np.mean(female_df["age"]), height=2 * np.std(female_df["age"]),
              width=ylim, color="black",
              alpha=.25)
-    ax2.legend(fontsize=fs, loc="lower right",)# bbox_to_anchor=(1, 0.01))  # required for LT dataset
+    ax2.legend(fontsize=fs, loc="lower right", bbox_to_anchor=(1, 0.01))  # required for LT dataset
     ax2.set_xlim(0, ylim)
     # ax1.invert_yaxis()
     ax2.set_title(f"Female ({100 * len(female_df) / len(df):.1f}%)"
