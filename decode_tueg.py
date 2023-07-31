@@ -731,9 +731,13 @@ def _add_ages_from_additional_sources(description):
         else:
             birthyear = int(matches[0])
         description.loc[i, 'date_age'] = int(rec_year) - birthyear
-        pattern = r'(\d+)[ -]+?[years]{3,5}[ -]+?[old]{3}'
+        # misses ~35% recs in longitudinal datasets
+        #pattern = r'(\d+)[ -]+?[years]{3,5}[ -]+?[old]{3}'
         # is this also fine? also finds 33 y.o. often used in old reports
         #pattern = r'(\d+)[ -]+?[years]{1,5}[ -.]+?[old]{1,3}[ .]+?'  
+        #pattern = r'(\d+)[ -]+?[years]{1,5}[ -.]+?[old]{1,3}'
+        #pattern = r'(\d+)[ -]+?[years]{1,5}[ -.]?[old]{1,3}'
+        pattern = r'(\d+)[ -]+?y[ears]{0,4}[ -.]?o[ld]{0,2}'
         matches = re.findall(pattern, description.iloc[i].report)
         if len(matches) >= 1:
             # assume report always starts with 'XX year old ...'
@@ -759,9 +763,9 @@ def reject_derivating_ages(tuabn_train):
 
 def _reject_derivating_ages(description):
     # if the difference is bigger than one year, possible due to anonymization, reject the recording
-    c1 = (description.age - description.report_age).abs() < 2
-    c2 = (description.age - description.date_age).abs() < 2
-    c3 = (description.date_age - description.report_age).abs() < 2
+    c1 = (description.age - description.report_age).abs() <= 1  # < 2
+    c2 = (description.age - description.date_age).abs() <= 1  # < 2
+    c3 = (description.date_age - description.report_age).abs() <= 1  # < 2
     ids = description[c1 & c2 & c3].index.to_list()
     return ids
 
@@ -2119,8 +2123,8 @@ def find_threshs(df):  # gaps, pathological
     return (t_2, t_1) if t_2 < t_1 else (t_1, t_2)
 
 
-def get_perm_test_hist_perm_test_grid():
-    fig, ax = plt.subplots(1, 1, figsize=(18,4))
+def get_perm_test_hist_perm_test_grid(height=2.5):
+    fig, ax = plt.subplots(1, 1, figsize=(18, height))
     plt.subplots_adjust(wspace=1.8)
     # hist
     ax0 = plt.subplot2grid((3, 23), (0, 3), rowspan=3, colspan=17, fig=fig)
@@ -2220,17 +2224,18 @@ def plot_age_gap_hist_with_threshs(
     ax.axvline(t_low, c='k', linestyle='--', label=f'Threshold 1 ({t_low:.2f})')
     ax.axvline(t_high, c='k', linestyle=':', label=f'Threshold 2 ({t_high:.2f})')
 
-    ax.legend(title='Pathological', loc='best', ncol=1)
+    ax.legend(title='Pathological', loc='upper left', ncol=1)
     
     max_abs_v = g1.gap.abs().max()*1.1
     ax.set_xlim(-max_abs_v, max_abs_v)
-
+    offset = 10
+    
     ax.axvspan(
-        t_high, ax.get_xlim()[1],
+        t_high, ax.get_xlim()[1]+offset,
         facecolor='orange', alpha=.1, zorder=-100,
     )
     ax.axvspan(
-        ax.get_xlim()[0], t_low, 
+        ax.get_xlim()[0]-offset, t_low, 
         facecolor='orange', alpha=.1, zorder=-100,
     )
     ax.axvspan(
@@ -2428,6 +2433,9 @@ def plot_heatmaps(df, bin_size):#, max_age, hist_max_count):
     ax0.axvline(df_np.y_true.mean(), c='cyan', linestyle=':')
     sns.histplot(df_p.y_true, ax=ax1, color='r', kde=True, bins=bins)
     ax1.axvline(df_p.y_true.mean(), c='magenta', linestyle=':')
+    
+    # turn off grid lines?
+    #ax0.grid(False)
 
     #get ticks of ax0 and ax1, get the one with more and use for both
     if not df_np.empty and not df_p.empty:
@@ -2593,7 +2601,7 @@ def plot_age_gap_hist(
 
 
 def get_hist_perm_test_grid(height=2.5):
-    fig, ax = plt.subplots(1, 1, figsize=(14,height))
+    fig, ax = plt.subplots(1, 1, figsize=(18,height))
     ax0 = plt.subplot2grid((3, 20), (0, 0), rowspan=3, colspan=17, fig=fig)
     ax1 = plt.subplot2grid((3, 20), (0, 17), rowspan=3, colspan=3, fig=fig)
     ax1.yaxis.tick_right()
@@ -2706,7 +2714,6 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps_and_permutation_test(
     d, n_repetitions, bin_width):
     ax0, ax1 = get_hist_perm_test_grid()
     ax0 = plot_mean_abs_running_diff_of_mean_corrected_gaps(d, ax=ax0, bin_width=bin_width)
-    ax0.legend(ncol=1)
     observed, sampled = age_gap_diff_permutations(d, n_repetitions, True, key='mean')
     ax1 = plot_violin_new(observed, sampled, central_value=0, ax1=ax1)
     ax1.set_ylabel('Mean Difference\n[years]')    
@@ -2723,9 +2730,9 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
     ax = sns.histplot(data=non_patho_df, x='mean', color='b', ax=ax, kde=True, bins=bins, 
-                      label=f'False (n={len(non_patho_df)})')
+                      label=f'False (n={sum(non_patho_df["mean"] > 0)})')
     ax = sns.histplot(data=patho_df, x='mean', color='r', ax=ax, kde=True, bins=bins, 
-                      label=f'True (n={len(patho_df)})')
+                      label=f'True (n={sum(patho_df["mean"] > 0)})')
     mean_non_patho_gap = non_patho_df['mean'].mean()
     std_non_patho_gap = non_patho_df['mean'].std()
     mean_patho_gap = patho_df['mean'].mean()
@@ -2739,7 +2746,7 @@ def plot_mean_abs_running_diff_of_mean_corrected_gaps(df, cutoff_value=32, bin_w
             mean_patho_gap, c='magenta', 
             label=f'True mean ({mean_patho_gap:.2f} $\pm {std_patho_gap:.2f}$)',
         )
-    ax.legend()
+    ax.legend(ncol=2)
     ax.set_xlabel('Mean Absolute Running Difference of Gaps [years]')
     return ax
 
@@ -2946,8 +2953,9 @@ def _read_result(
             pass
         # TODO: add longitudinal preds?
         #this_result['gap'] = this_result.y_true - this_result.y_pred
-    elif result.startswith('longitudinal'):
+    elif result.startswith('l') or result.startswith('n'):  # longitudinal / lnp, lp, lnpp, lpnp / nlnp, nlp, nlnp, nlpnp
         pred_path = os.path.join(exp_dir, 'preds', f'{checkpoint}_{result}_preds.csv')
+        print(pred_path)
         this_result = pd.read_csv(pred_path, index_col=0)
         this_result['subset'] = result
     elif result == 'train_preds':
@@ -3023,15 +3031,11 @@ def plot_longitudinal_interval_hists(description):
     return ax
 
 
-def plot_n_recs_per_subject_and_rec_intervals(
-    n_recs_per_subject,
-    rec_intervals,
-):
-    df = rec_intervals
+def plot_n_recs_per_subject(n_recs_per_subject, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(7, 3))
     # n_recs_per_subject = df.groupby(['Longitudinal', 'subject'], as_index=False).size()    
-    fig, ax_arr = plt.subplots(1, 2, figsize=(12, 3))
-    ax = ax_arr[0]
-    x = 'Longitudinal'
+    x = 'Dataset'
     y = 'size'
     ax = sns.violinplot(
         data=n_recs_per_subject, 
@@ -3039,26 +3043,38 @@ def plot_n_recs_per_subject_and_rec_intervals(
         y=y, 
         inner='quartile',
         cut=0,
-        palette=['b', 'r', 'g'], 
+        palette=['b', 'r', 'purple', 'orange'], 
         ax=ax,
     )
     ax.set_ylim(2, 6)
     ax.set_ylabel('Number Of Recordings Per Subject')
-    ax.set_xlabel('Longitudinal')
+    ax.set_xlabel('')
+    
     means = n_recs_per_subject.groupby(x).mean()
     stds = n_recs_per_subject.groupby(x).std()
-    mean = means.loc['Non-Pathological', y]
-    std = stds.loc['Non-Pathological', y]
-    ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['Pathological', y]
-    std = stds.loc['Pathological', y]
-    ax.axhline(mean, .33, .66, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['Transition', y]
-    std = stds.loc['Transition', y]
-    ax.axhline(mean, .66, 1, c='g', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    ax.legend(loc='upper center', ncol=3, bbox_to_anchor=(.5,1.22))
+    mean = means.loc['LNP', y]
+    std = stds.loc['LNP', y]
+    ax.axhline(mean, 0, .25, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LP', y]
+    std = stds.loc['LP', y]
+    ax.axhline(mean, .25, .5, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LNPP', y]
+    std = stds.loc['LNPP', y]
+    ax.axhline(mean, .5, .75, c='purple', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LPNP', y]
+    std = stds.loc['LPNP', y]
+    ax.axhline(mean, .75, 1, c='orange', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    ax.legend(loc='upper center', ncol=4, bbox_to_anchor=(.5,1.22))
+    from matplotlib.collections import PolyCollection
+    for art in ax.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.75)
+    return ax
 
-    ax = ax_arr[1]
+
+def plot_rec_intervals(df, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(7, 3))
     x = 'Dataset'
     y = 'Interval [days]'
     ax = sns.violinplot(
@@ -3067,21 +3083,24 @@ def plot_n_recs_per_subject_and_rec_intervals(
         x=x, 
         inner='quartile',
         cut=0, 
-        palette=['b', 'r', 'g'],
+        palette=['b', 'r', 'purple', 'orange'],
         ax=ax,
     )
-    ax.set_xlabel('Longitudinal')
+    ax.set_xlabel('')
     means = df.groupby(x).mean()
     stds = df.groupby(x).std()
-    mean = means.loc['Non-Pathological', y]
-    std = stds.loc['Non-Pathological', y]
-    ax.axhline(mean, 0, .33, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['Pathological', y]
-    std = stds.loc['Pathological', y]
-    ax.axhline(mean, .33, .66, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['Transition', y]
-    std = stds.loc['Transition', y]
-    ax.axhline(mean, .66, 1, c='g', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LNP', y]
+    std = stds.loc['LNP', y]
+    ax.axhline(mean, 0, .25, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LP', y]
+    std = stds.loc['LP', y]
+    ax.axhline(mean, .25, .5, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LNPP', y]
+    std = stds.loc['LNPP', y]
+    ax.axhline(mean, .5, .75, c='purple', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    mean = means.loc['LPNP', y]
+    std = stds.loc['LPNP', y]
+    ax.axhline(mean, .75, 1, c='orange', label=f'{mean:.2f}\n($\pm${std:.2f})')
     # super slow
     #ax = sns.swarmplot(
     #    data=df, y='Interval [days]', x='Dataset', 
@@ -3090,14 +3109,24 @@ def plot_n_recs_per_subject_and_rec_intervals(
     ax.set_ylim(bottom=0, top=365*4)
     ax.set_ylabel('Recording Interval [days]')
     #ax.get_legend().remove()
-    ax.legend(loc='upper center', ncol=3, bbox_to_anchor=(.5,1.22))
+    ax.legend(loc='upper center', ncol=4, bbox_to_anchor=(.5,1.22))
 
 
     from matplotlib.collections import PolyCollection
-    for ax in ax_arr:
-        for art in ax.get_children():
-            if isinstance(art, PolyCollection):
-                art.set_alpha(.75)
+    for art in ax.get_children():
+        if isinstance(art, PolyCollection):
+            art.set_alpha(.75)
+    return ax
+
+
+# TODO: split into two functions
+def plot_n_recs_per_subject_and_rec_intervals(
+    n_recs_per_subject,
+    rec_intervals,
+):
+    fig, ax_arr = plt.subplots(1, 2, figsize=(14, 2.5))
+    ax0 = plot_n_recs_per_subject(n_recs_per_subject, ax_arr[0])
+    ax1 = plot_n_recs_per_subject(n_recs_per_subject, ax_arr[1])
     return ax_arr
 
 
@@ -3106,6 +3135,7 @@ def extract_longitudinal_dataset(description, kind, load):
     dfs = []
     for s, g in description.groupby('subject'):
         if len(g) > 1:
+            # TODO: force to only have transition into one direction?
             if g.pathological.nunique() == 2:
                 if kind == 'transition':
                         dfs.append(g)
@@ -3124,21 +3154,25 @@ def extract_longitudinal_dataset(description, kind, load):
         if kind in ['pathological', 'non_pathological']:
             assert all(dfs.groupby('subject').pathological.nunique() == 1)
     print("n recs", len(dfs), "n subj", dfs.subject.nunique())
+    
     if not load:
         return dfs
     else:
-        dfs = dfs.T
-        ds = []
-        for i, s in dfs.iteritems():
-            p = s.path
-            p = p.replace('/data/datasets/TUH/EEG/tuh_eeg/', '/home/jovyan/mne_data/TUH_PRE/tuh_eeg/')
-            if not os.path.exists(p):
-                raise RuntimeError("rec not found")
-            raw = mne.io.read_raw_edf(p, preload=False, verbose='error')
-            d = BaseDataset(raw, s, target_name='age')
-            ds.append(d)
-        ds = BaseConcatDataset(ds)
-        return ds
+        return _load_longitudinal_dataset_from_df(dfs)
+
+def _load_longitudinal_dataset_from_df(dfs):
+    dfs = dfs.T
+    ds = []
+    for i, s in dfs.iteritems():
+        p = s.path
+        p = p.replace('/data/datasets/TUH/EEG/tuh_eeg/', '/home/jovyan/mne_data/TUH_PRE/tuh_eeg/')
+        if not os.path.exists(p):
+            raise RuntimeError("rec not found")
+        raw = mne.io.read_raw_edf(p, preload=False, verbose='error')
+        d = BaseDataset(raw, s, target_name='age')
+        ds.append(d)
+    ds = BaseConcatDataset(ds)
+    return ds
     
     
 def fit_deconfound_model(y_true, y_pred):
