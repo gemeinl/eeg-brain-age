@@ -303,7 +303,7 @@ def decode_tueg(
     logger.info('processing valid_rest / longitudinal')
     ds_names = [valid_rest_name]
     if final_eval == 1:
-        ds_names.extend(['transition', 'non_pathological', 'pathological'])
+        ds_names.extend(['transition', 'non_pathological', 'pathological'])  # lnp, lp, lnpp, lpnp
     for ds_name in ds_names:
         logger.debug(f"dataset {ds_name}")
         if ds_name == valid_rest_name:
