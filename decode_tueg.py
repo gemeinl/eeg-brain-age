@@ -2597,6 +2597,10 @@ def plot_age_gap_hist(
     ax.set_xlabel('Decoded Age – Chronological Age [years]')
     #ax.set_title(f'Brain age gap')
     ax.legend(title='Pathological', loc='best', ncol=1)
+    
+    # try force integer ticks
+    from matplotlib.ticker import MaxNLocator
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     return ax
 
 
