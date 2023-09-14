@@ -2567,10 +2567,11 @@ def plot_age_gap_hist(
     ])
     patho_df = df[df.pathological == 1]
     non_patho_df = df[df.pathological == 0]
+    stat = 'percent'
     ax = sns.histplot(data=non_patho_df, x='gap', color='b', ax=ax, kde=True, bins=bins, 
-                      label=f'False (n={len(non_patho_df)})')
+                      label=f'False (n={len(non_patho_df)})', stat=stat)
     ax = sns.histplot(data=patho_df, x='gap', color='r', ax=ax, kde=True, bins=bins, 
-                      label=f'True (n={len(patho_df)})')
+                      label=f'True (n={len(patho_df)})', stat=stat)
     mean_non_patho_gap = non_patho_df.gap.mean()
     std_non_patho_gap = non_patho_df.gap.std()
     mean_patho_gap = patho_df.gap.mean()
@@ -3041,33 +3042,25 @@ def plot_n_recs_per_subject(n_recs_per_subject, ax=None):
     # n_recs_per_subject = df.groupby(['Longitudinal', 'subject'], as_index=False).size()    
     x = 'Dataset'
     y = 'size'
+    cs = ['b', 'r', 'purple', 'orange']
     ax = sns.violinplot(
         data=n_recs_per_subject, 
         x=x, 
         y=y, 
         inner='quartile',
         cut=0,
-        palette=['b', 'r', 'purple', 'orange'], 
+        palette=cs,
         ax=ax,
     )
     ax.set_ylim(2, 6)
     ax.set_ylabel('Number Of Recordings Per Subject')
-    ax.set_xlabel('')
-    
-    means = n_recs_per_subject.groupby(x).mean()
-    stds = n_recs_per_subject.groupby(x).std()
-    mean = means.loc['LNP', y]
-    std = stds.loc['LNP', y]
-    ax.axhline(mean, 0, .25, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LP', y]
-    std = stds.loc['LP', y]
-    ax.axhline(mean, .25, .5, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LNPP', y]
-    std = stds.loc['LNPP', y]
-    ax.axhline(mean, .5, .75, c='purple', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LPNP', y]
-    std = stds.loc['LPNP', y]
-    ax.axhline(mean, .75, 1, c='orange', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    ax.set_xlabel('')  
+    means = n_recs_per_subject.groupby(x, as_index=False).mean()
+    stds = n_recs_per_subject.groupby(x, as_index=False).std()
+    for ds_i, ds_name in enumerate(means.Dataset.unique()):
+        mean = means[means.Dataset==ds_name][y].squeeze()
+        std = stds[stds.Dataset==ds_name][y].squeeze()
+        ax.axhline(mean, ds_i*0.25, (ds_i+1)*.25, c=cs[ds_i], label=f'{mean:.2f}\n($\pm${std:.2f})')
     ax.legend(loc='upper center', ncol=4, bbox_to_anchor=(.5,1.22))
     from matplotlib.collections import PolyCollection
     for art in ax.get_children():
@@ -3081,30 +3074,23 @@ def plot_rec_intervals(df, ax=None):
         fig, ax = plt.subplots(1, 1, figsize=(7, 3))
     x = 'Dataset'
     y = 'Interval [days]'
+    cs = ['b', 'r', 'purple', 'orange']
     ax = sns.violinplot(
         data=df,
         y=y,
         x=x, 
         inner='quartile',
         cut=0, 
-        palette=['b', 'r', 'purple', 'orange'],
+        palette=cs,
         ax=ax,
     )
     ax.set_xlabel('')
-    means = df.groupby(x).mean()
-    stds = df.groupby(x).std()
-    mean = means.loc['LNP', y]
-    std = stds.loc['LNP', y]
-    ax.axhline(mean, 0, .25, c='b', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LP', y]
-    std = stds.loc['LP', y]
-    ax.axhline(mean, .25, .5, c='r', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LNPP', y]
-    std = stds.loc['LNPP', y]
-    ax.axhline(mean, .5, .75, c='purple', label=f'{mean:.2f}\n($\pm${std:.2f})')
-    mean = means.loc['LPNP', y]
-    std = stds.loc['LPNP', y]
-    ax.axhline(mean, .75, 1, c='orange', label=f'{mean:.2f}\n($\pm${std:.2f})')
+    means = df.groupby(x, as_index=False).mean()
+    stds = df.groupby(x, as_index=False).std()
+    for ds_i, ds_name in enumerate(means.Dataset.unique()):
+        mean = means[means.Dataset==ds_name][y].squeeze()
+        std = stds[stds.Dataset==ds_name][y].squeeze()
+        ax.axhline(mean, ds_i*0.25, (ds_i+1)*.25, c=cs[ds_i], label=f'{mean:.2f}\n($\pm${std:.2f})')
     # super slow
     #ax = sns.swarmplot(
     #    data=df, y='Interval [days]', x='Dataset', 
@@ -3257,15 +3243,21 @@ def freqs_to_bin(bins, freqs):
     return [np.abs(bins - freq).argmin() for freq in freqs]
 
 
-def add_grads_cbar(fig, ax_img):
+def add_grads_cbar(fig, ax_img, flip_x_y, max_abs):
     # manually add colorbar
     ax_x_start = 0.95
     ax_x_width = 0.04
-    ax_y_start = 0.1
-    ax_y_height = 0.9
+    if not flip_x_y:
+        ax_y_start = 0.1
+        ax_y_height = 0.9
+    else:
+        ax_y_start = 0.3
+        ax_y_height = 0.6
     cbar_ax = fig.add_axes([ax_x_start, ax_y_start, ax_x_width, ax_y_height])
-    clb = fig.colorbar(ax_img, cax=cbar_ax)
-    clb.ax.set_title('') # gradient?
+    cbar = fig.colorbar(ax_img, cax=cbar_ax)
+    cbar.ax.set_title('') # gradient?
+    # add ticks for min and max value and some for orientation in between
+    cbar.set_ticks(np.linspace(-max_abs, max_abs, 5))
 
     
 def plot_band_grads(all_band_grads, info, band, flip_x_y):
@@ -3288,13 +3280,13 @@ def plot_band_grads(all_band_grads, info, band, flip_x_y):
         if not flip_x_y:
             ax_img.axes.set_title(f'{subset}\n')
             if subset_i == 0:
-                ax_img.axes.set_ylabel('-'.join([str(i) for i in band])+' Hz\n')
+                ax_img.axes.set_ylabel('–'.join([str(i) for i in band])+' Hz\n')
         else:
-            ax_img.axes.set_title('-'.join([str(i) for i in subset])+' Hz\n')
+            ax_img.axes.set_title('–'.join([str(i) for i in subset])+' Hz\n')
             if subset_i == 0:
                 ax_img.axes.set_ylabel(f'{band[0]}\n')
     # move one in for sanity check. one band, all subsets -> same cbar vlim
-    add_grads_cbar(fig, ax_img)
+    add_grads_cbar(fig, ax_img, flip_x_y, max_abs)
     return fig
 
 
