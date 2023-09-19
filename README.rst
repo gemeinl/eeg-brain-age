@@ -1,0 +1,31 @@
+eeg-brain-age
+=============
+
+This repository contains resources that were used for our study entitled
+
+"**Revisiting Brain Age Based on Clinical EEG: Investigations of Train And State Hypotheses With Deep Learning"**".
+
+Requirements
+============
+Requirements are specified in environment.yml. versions.txt contains exact package versions used to run the code.
+
+Data
+====
+Our study is based on the Temple University Hospital EEG Corpus, the Temple University Hospital Abnormal EEG Corpus (v2.0.0), and several novel datasets derived thereof.
+The corpora available for download at: https://www.isip.piconepress.com/projects/tuh_eeg/html/downloads.shtml, detail on how to create the derivatives can be found in the code database.
+
+Citing
+======
+
+If you use this code in a scientific publication, please cite us as:
+
+.. code-block:: bibtex
+
+  @article{gemein2020machine,
+    title={Revisiting Brain Age Based on Clinical EEG: Investigation of The State And Trait Hypotheses With Deep Learning},
+    author={Gemein, Lukas AW and Schirrmeister, Robin T and Boedecker, Joschka and Ball, Tonio},
+    journal={arXiv},
+    pages={},
+    year={},
+    publisher={}
+  }
