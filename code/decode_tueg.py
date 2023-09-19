@@ -291,7 +291,7 @@ def decode_tueg(
     # compute gradients for valid / eval and save to file
     logger.info('computing gradients')
     # TODO: do we need valid rest gradients? yes
-    grads = compute_gradients(estimator, tuabn_valid, batch_size, n_jobs)
+    grads = compute_gradients(estimator, tuabn_valid, batch_size, n_jobs, input_times_gradient=True)
     grad_path = os.path.join(out_dir, 'grads')
     makedir(grad_path)
     save_csv(grads, grad_path, f'train_end_{test_name(final_eval)}_grads.csv')
@@ -351,7 +351,7 @@ def decode_tueg(
         scores = pd.concat([scores, ds_score], axis=1)
         save_csv(scores, out_dir, 'train_end_scores.csv')
         if ds_name == valid_rest_name:
-            grads = compute_gradients(estimator, ds, batch_size, n_jobs)
+            grads = compute_gradients(estimator, ds, batch_size, n_jobs, input_times_gradient=True)
             save_csv(grads, grad_path, f'train_end_{valid_rest_name}_grads.csv')
     logger.info('done.')
     
@@ -3201,19 +3201,37 @@ def deconfound(df_, detrend):
     return df
 
 
-def compute_gradients(estimator, ds, batch_size, n_jobs):
+def compute_gradients(estimator, ds, batch_size, n_jobs, input_times_gradient, age_ranges=None):
     split_key = 'pathological'
     all_grads_df = []
     for pathological, d in ds.split(split_key).items():
-        grads = compute_amplitude_gradients(estimator.module, d, batch_size, n_jobs)
-        print(grads.shape)
-        # TODO: do not average gradients but backtrack to trials to enable subject-wise subgroup analysis (e.g. 30-60 years)
-        # 
+        print('n datasets', len(d.datasets))
+        grads = compute_amplitude_gradients(estimator.module, d, batch_size, n_jobs, input_times_gradient)
+        print('grads', grads.shape)
+        # do not average gradients but backtrack to trials to enable subject-wise subgroup analysis (e.g. 30-60 years)?
+        df = d.get_metadata()
+        print('description', df.shape)
+        if age_ranges is None:
+            age_ranges = [(df.age.min().squeeze(), df.age.max().squeeze())]
+        for age_range in age_ranges:
+            cond = (df.age >= age_range[0]) & (df.age <= age_range[1])
+            age_grads = grads[:, cond]
+            if not age_grads.any():
+                print("no subjects in specified age range")
+                continue
+            age_grads = age_grads.mean((1, 0))
+            freqs, info = get_freqs_and_info(d)
+            grads_df = pd.DataFrame(age_grads, index=info.ch_names, columns=freqs)
+            grads_df[split_key] = pathological
+            grads_df['age_range'] = [age_range] * len(grads_df)
+            all_grads_df.append(grads_df)
+    """    
         grads = grads.mean((1, 0))
         freqs, info = get_freqs_and_info(d)
         grads_df = pd.DataFrame(grads, index=info.ch_names, columns=freqs)
         grads_df[split_key] = pathological
         all_grads_df.append(grads_df)
+    """
     all_grads_df = pd.concat(all_grads_df)
     return all_grads_df
 
@@ -3243,7 +3261,7 @@ def freqs_to_bin(bins, freqs):
     return [np.abs(bins - freq).argmin() for freq in freqs]
 
 
-def add_grads_cbar(fig, ax_img, flip_x_y, max_abs):
+def add_grads_cbar(fig, ax_img, flip_x_y, max_abs, gradients_x_input):
     # manually add colorbar
     ax_x_start = 0.95
     ax_x_width = 0.04
@@ -3255,12 +3273,12 @@ def add_grads_cbar(fig, ax_img, flip_x_y, max_abs):
         ax_y_height = 0.6
     cbar_ax = fig.add_axes([ax_x_start, ax_y_start, ax_x_width, ax_y_height])
     cbar = fig.colorbar(ax_img, cax=cbar_ax)
-    cbar.ax.set_title('') # gradient?
+    cbar.ax.set_ylabel('') if not gradients_x_input else cbar.ax.set_ylabel('Gradients x Amplitudes\n[$\mu$V]') # gradient?
     # add ticks for min and max value and some for orientation in between
     cbar.set_ticks(np.linspace(-max_abs, max_abs, 5))
 
     
-def plot_band_grads(all_band_grads, info, band, flip_x_y):
+def plot_band_grads(all_band_grads, info, band, flip_x_y, gradients_x_input):
     fig, ax_arr = plt.subplots(1, len(all_band_grads), figsize=(10, 3), squeeze=False)
     # for better comparability, compute vlim over all pathological subsets of a freq band
     same_scale = True
@@ -3286,7 +3304,7 @@ def plot_band_grads(all_band_grads, info, band, flip_x_y):
             if subset_i == 0:
                 ax_img.axes.set_ylabel(f'{band[0]}\n')
     # move one in for sanity check. one band, all subsets -> same cbar vlim
-    add_grads_cbar(fig, ax_img, flip_x_y, max_abs)
+    add_grads_cbar(fig, ax_img, flip_x_y, max_abs, gradients_x_input)
     return fig
 
 
