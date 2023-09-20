@@ -3,7 +3,7 @@ eeg-brain-age
 
 This repository contains resources that were used for our study entitled
 
-"**Revisiting Brain Age Based on Clinical EEG: Investigations of Train And State Hypotheses With Deep Learning"**".
+"**Revisiting Brain Age Based on Clinical EEG: Investigations of The Trait And State Hypotheses With Deep Learning"**".
 
 Requirements
 ============
