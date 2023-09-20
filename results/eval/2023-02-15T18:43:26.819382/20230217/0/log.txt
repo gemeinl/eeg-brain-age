@@ -1,0 +1,199 @@
+2023-02-15 18:45:06 WARNING  'valid_set_i' without effect when final_eval is True
+2023-02-15 18:45:06 INFO     
+augment                                                                dropout
+batch_size                                                                 128
+data_path                    /home/jovyan/mne_data/TUH_PRE/tuh_eeg_abnormal...
+date                                                2023-02-15T18:43:26.819382
+debug                                                                        1
+fast_mode                                                                    1
+final_eval                                                                   1
+intuitive_training_scores                                                    1
+loss                                                                       mae
+max_age                                                                     -1
+min_age                                                                     -1
+model_name                                                                 tcn
+n_epochs                                                                    35
+n_jobs                                                                       4
+n_restarts                                                                   0
+n_train_recordings                                                          -1
+out_dir                                                      /work/experiments
+preload                                                                      0
+run_name                                                            decode_age
+seed                                                                  20230217
+shuffle_data_before_split                                                    1
+squash_outs                                                                  1
+standardize_data                                                             1
+standardize_targets                                                          1
+subsample                                                                    0
+subset                                                                  normal
+target_name                                                                age
+tmax                                                                        -1
+tmin                                                                        60
+valid_set_i                                                                  0
+window_size_samples                                                       6000
+dtype: object
+2023-02-15 18:45:06 DEBUG    cuda: True
+2023-02-15 18:45:06 DEBUG    cropped: True
+2023-02-15 18:45:06 DEBUG    indexing files
+2023-02-15 18:45:33 DEBUG    after read 2993
+2023-02-15 18:45:33 INFO     rejecting recordings with > 1 year derivation in header, dates, and report
+2023-02-15 18:45:34 DEBUG    there are 1472 patho and 1521 non-patho recordings in total
+2023-02-15 18:45:40 DEBUG    there are 1334 patho and 1384 non-patho recordings left
+2023-02-15 18:45:40 DEBUG    after exclude 2718
+2023-02-15 18:45:40 DEBUG    splitting dataset with 2718 recordings
+2023-02-15 18:45:40 DEBUG    subject wise 
+2023-02-15 18:45:40 DEBUG    into train (0.9) and eval (0.1).
+2023-02-15 18:45:40 DEBUG    after train eval 2475, 243
+2023-02-15 18:45:40 INFO     from train (2475) and eval (243) selecting normal
+2023-02-15 18:45:41 DEBUG    selected train (1247) and eval (137)
+2023-02-15 18:45:41 DEBUG    valid_rest (aka not normal) has 106
+2023-02-15 18:45:41 DEBUG    some raw durations [1187.0, 3009.0, 1463.0]
+2023-02-15 18:45:41 DEBUG    preprocessing
+2023-02-15 18:45:41 DEBUG    adding cropper 60 – None
+2023-02-15 18:45:47 DEBUG    some preprocessed durations [1127.0, 2949.0, 1403.0]
+2023-02-15 18:45:47 DEBUG    train datasets 1247
+2023-02-15 18:45:47 DEBUG    eval datasets 137
+2023-02-15 18:45:48 DEBUG    creating model
+2023-02-15 18:45:48 INFO     Sequential(
+  (tcn): TCN(
+    (ensuredims): Ensure4d()
+    (temporal_blocks): Sequential(
+      (temporal_block_0): TemporalBlock(
+        (conv1): Conv1d(21, 53, kernel_size=(9,), stride=(1,), padding=(8,))
+        (chomp1): Chomp1d(chomp_size=8)
+        (relu1): ReLU()
+        (dropout1): Dropout1d(p=0.0195875974361336, inplace=False)
+        (conv2): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(8,))
+        (chomp2): Chomp1d(chomp_size=8)
+        (relu2): ReLU()
+        (dropout2): Dropout1d(p=0.0195875974361336, inplace=False)
+        (downsample): Conv1d(21, 53, kernel_size=(1,), stride=(1,))
+        (relu): ReLU()
+      )
+      (temporal_block_1): TemporalBlock(
+        (conv1): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(16,), dilation=(2,))
+        (chomp1): Chomp1d(chomp_size=16)
+        (relu1): ReLU()
+        (dropout1): Dropout1d(p=0.0195875974361336, inplace=False)
+        (conv2): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(16,), dilation=(2,))
+        (chomp2): Chomp1d(chomp_size=16)
+        (relu2): ReLU()
+        (dropout2): Dropout1d(p=0.0195875974361336, inplace=False)
+        (relu): ReLU()
+      )
+      (temporal_block_2): TemporalBlock(
+        (conv1): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(32,), dilation=(4,))
+        (chomp1): Chomp1d(chomp_size=32)
+        (relu1): ReLU()
+        (dropout1): Dropout1d(p=0.0195875974361336, inplace=False)
+        (conv2): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(32,), dilation=(4,))
+        (chomp2): Chomp1d(chomp_size=32)
+        (relu2): ReLU()
+        (dropout2): Dropout1d(p=0.0195875974361336, inplace=False)
+        (relu): ReLU()
+      )
+      (temporal_block_3): TemporalBlock(
+        (conv1): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(64,), dilation=(8,))
+        (chomp1): Chomp1d(chomp_size=64)
+        (relu1): ReLU()
+        (dropout1): Dropout1d(p=0.0195875974361336, inplace=False)
+        (conv2): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(64,), dilation=(8,))
+        (chomp2): Chomp1d(chomp_size=64)
+        (relu2): ReLU()
+        (dropout2): Dropout1d(p=0.0195875974361336, inplace=False)
+        (relu): ReLU()
+      )
+      (temporal_block_4): TemporalBlock(
+        (conv1): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(128,), dilation=(16,))
+        (chomp1): Chomp1d(chomp_size=128)
+        (relu1): ReLU()
+        (dropout1): Dropout1d(p=0.0195875974361336, inplace=False)
+        (conv2): Conv1d(53, 53, kernel_size=(9,), stride=(1,), padding=(128,), dilation=(16,))
+        (chomp2): Chomp1d(chomp_size=128)
+        (relu2): ReLU()
+        (dropout2): Dropout1d(p=0.0195875974361336, inplace=False)
+        (relu): ReLU()
+      )
+    )
+    (fc): Linear(in_features=53, out_features=1, bias=True)
+    (squeeze): Expression(expression=squeeze_final_output) 
+  )
+  (sigmoid): Sigmoid()
+)
+2023-02-15 18:45:48 DEBUG    model produces 5504 preds for every input of size 6000
+2023-02-15 18:45:48 DEBUG    windowing
+2023-02-15 18:48:36 DEBUG    train windows 308734
+2023-02-15 18:48:36 DEBUG    eval windows 34406
+2023-02-15 18:48:40 DEBUG    prior to data scaling -7.065933914418565e-06
+2023-02-15 18:48:40 DEBUG    post data scaling -0.18559370934963226
+2023-02-15 18:48:43 DEBUG    mean/min train age: 12.00
+2023-02-15 18:48:43 DEBUG    std/max train age: 95.00
+2023-02-15 18:48:43 DEBUG    prior to minmax target scaling 39
+2023-02-15 18:48:43 DEBUG    post minmax target scaling 0.32530120481927716
+2023-02-15 18:48:43 DEBUG    sending to gpu
+2023-02-15 18:48:45 DEBUG    Adding augmentation transform 'dropout'
+2023-02-15 18:48:45 INFO     TUAB, 1247–137 normal, 60s–-1s, age, tcn, 35–0, mae, dropout, eval
+2023-02-15 18:48:45 INFO     starting training
+2023-02-15 19:02:20 INFO       epoch    eval_loss    train_loss    valid_loss    cp      lr       dur
+2023-02-15 19:02:20 INFO     -------  -----------  ------------  ------------  ----  ------  --------
+2023-02-15 19:02:20 INFO           1       [36m0.1187[0m        [32m0.1324[0m        [35m0.1187[0m     +  0.0005  814.9343
+2023-02-15 19:15:56 INFO           2       [36m0.1074[0m        [32m0.1103[0m        [35m0.1074[0m     +  0.0005  815.7570
+2023-02-15 19:29:31 INFO           3       0.1084        [32m0.0994[0m        0.1084        0.0005  814.8487
+2023-02-15 19:43:07 INFO           4       [36m0.0990[0m        [32m0.0927[0m        [35m0.0990[0m     +  0.0005  816.0168
+2023-02-15 19:56:44 INFO           5       [36m0.0980[0m        [32m0.0881[0m        [35m0.0980[0m     +  0.0005  816.2366
+2023-02-15 20:10:20 INFO           6       0.0997        [32m0.0853[0m        0.0997        0.0004  815.9422
+2023-02-15 20:23:57 INFO           7       [36m0.0937[0m        [32m0.0823[0m        [35m0.0937[0m     +  0.0004  816.0918
+2023-02-15 20:37:34 INFO           8       [36m0.0919[0m        [32m0.0802[0m        [35m0.0919[0m     +  0.0004  816.4840
+2023-02-15 20:51:10 INFO           9       0.1039        [32m0.0785[0m        0.1039        0.0004  815.9093
+2023-02-15 21:04:48 INFO          10       0.0934        [32m0.0768[0m        0.0934        0.0004  817.9738
+2023-02-15 21:18:24 INFO          11       0.0936        [32m0.0754[0m        0.0936        0.0004  816.5479
+2023-02-15 21:32:01 INFO          12       0.0924        [32m0.0739[0m        0.0924        0.0004  816.3833
+2023-02-15 21:45:37 INFO          13       0.0922        [32m0.0725[0m        0.0922        0.0003  816.6363
+2023-02-15 21:59:15 INFO          14       [36m0.0900[0m        [32m0.0715[0m        [35m0.0900[0m     +  0.0003  816.4515
+2023-02-15 22:12:53 INFO          15       0.0976        [32m0.0703[0m        0.0976        0.0003  818.1140
+2023-02-15 22:26:29 INFO          16       0.0911        [32m0.0694[0m        0.0911        0.0003  816.5223
+2023-02-15 22:40:05 INFO          17       0.0909        [32m0.0683[0m        0.0909        0.0003  815.6969
+2023-02-15 22:53:44 INFO          18       [36m0.0899[0m        [32m0.0676[0m        [35m0.0899[0m     +  0.0002  818.3764
+2023-02-15 23:07:24 INFO          19       [36m0.0893[0m        [32m0.0666[0m        [35m0.0893[0m     +  0.0002  819.3075
+2023-02-15 23:21:03 INFO          20       0.0915        [32m0.0658[0m        0.0915        0.0002  819.0521
+2023-02-15 23:34:42 INFO          21       0.0895        [32m0.0653[0m        0.0895        0.0002  819.1356
+2023-02-15 23:48:25 INFO          22       0.0931        [32m0.0645[0m        0.0931        0.0002  822.7628
+2023-02-16 00:02:03 INFO          23       0.0902        [32m0.0636[0m        0.0902        0.0001  818.2455
+2023-02-16 00:15:43 INFO          24       [36m0.0883[0m        [32m0.0633[0m        [35m0.0883[0m     +  0.0001  818.9096
+2023-02-16 00:29:23 INFO          25       [36m0.0879[0m        [32m0.0627[0m        [35m0.0879[0m     +  0.0001  819.0404
+2023-02-16 00:43:04 INFO          26       0.0884        [32m0.0622[0m        0.0884        0.0001  820.9663
+2023-02-16 00:56:41 INFO          27       0.0896        [32m0.0618[0m        0.0896        0.0001  817.2429
+2023-02-16 01:10:19 INFO          28       0.0885        [32m0.0613[0m        0.0885        0.0001  818.3653
+2023-02-16 01:23:56 INFO          29       0.0887        [32m0.0610[0m        0.0887        0.0000  817.1800
+2023-02-16 01:37:32 INFO          30       0.0887        [32m0.0608[0m        0.0887        0.0000  815.4341
+2023-02-16 01:51:05 INFO          31       0.0884        [32m0.0604[0m        0.0884        0.0000  813.1440
+2023-02-16 02:04:43 INFO          32       0.0880        [32m0.0602[0m        0.0880        0.0000  817.6502
+2023-02-16 02:18:19 INFO          33       0.0885        [32m0.0601[0m        0.0885        0.0000  816.2613
+2023-02-16 02:31:55 INFO          34       0.0884        [32m0.0600[0m        0.0884        0.0000  815.6521
+2023-02-16 02:45:33 INFO          35       0.0883        0.0601        0.0883        0.0000  818.7140
+2023-02-16 02:45:35 INFO     finished training
+2023-02-16 02:45:35 INFO     on train reached
+2023-02-16 02:51:37 INFO     2.62 mae
+2023-02-16 02:51:37 INFO     1.72 mdae
+2023-02-16 02:51:37 INFO     0.94 r2
+2023-02-16 02:51:37 INFO     0.06 mape
+2023-02-16 02:51:37 INFO     0.04 mdape
+2023-02-16 02:51:37 INFO     on eval reached
+2023-02-16 02:52:19 INFO     6.62 mae
+2023-02-16 02:52:19 INFO     5.34 mdae
+2023-02-16 02:52:19 INFO     0.72 r2
+2023-02-16 02:52:19 INFO     0.17 mape
+2023-02-16 02:52:19 INFO     0.14 mdape
+2023-02-16 02:52:19 INFO     computing gradients
+2023-02-16 02:56:08 DEBUG    dataset eval_not_normal
+2023-02-16 02:56:08 DEBUG    preprocessing
+2023-02-16 02:56:08 DEBUG    adding cropper 60 – None
+2023-02-16 02:56:12 DEBUG    windowing
+2023-02-16 02:56:29 DEBUG    predicting
+2023-02-16 02:56:29 INFO     on eval_not_normal reached
+2023-02-16 02:57:11 INFO     12.78 mae
+2023-02-16 02:57:11 INFO     10.48 mdae
+2023-02-16 02:57:11 INFO     0.18 r2
+2023-02-16 02:57:11 INFO     0.22 mape
+2023-02-16 02:57:11 INFO     0.19 mdape
+2023-02-16 02:57:11 DEBUG    dataset transition
