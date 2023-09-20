@@ -7,12 +7,12 @@ This repository contains resources that were used for our study entitled
 
 Requirements
 ============
-Requirements are specified in environment.yml. versions.txt contains exact package versions used to run the code.
+Requirements are specified in *environment.yml*. *versions.txt* contains exact package versions used to run the code.
 
 Data
 ====
 Our study is based on the Temple University Hospital EEG Corpus, the Temple University Hospital Abnormal EEG Corpus (v2.0.0), and several novel datasets derived thereof.
-The corpora available for download at: https://www.isip.piconepress.com/projects/tuh_eeg/html/downloads.shtml, detail on how to create the derivatives can be found in the code database.
+The corpora are available for download at: https://www.isip.piconepress.com/projects/tuh_eeg/html/downloads.shtml. Detail on how to create the derivatives can be found in the code database.
 
 Citing
 ======
