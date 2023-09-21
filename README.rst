@@ -3,7 +3,9 @@ eeg-brain-age
 
 This repository contains resources that were used for our study entitled
 
-"**Revisiting Brain Age Based on Clinical EEG: Investigations of The Trait And State Hypotheses With Deep Learning"**
+"**Brain Age Revisited: Investigating the State vs. Trait Hypotheses of EEG-derived Brain-Age Dynamics with Deep Learning"**
+
+which is currenty in submission.
 
 Requirements
 ============
@@ -22,10 +24,7 @@ If you use this code in a scientific publication, please cite us as:
 .. code-block:: bibtex
 
   @article{gemein2020machine,
-    title={Revisiting Brain Age Based on Clinical EEG: Investigation of The State And Trait Hypotheses With Deep Learning},
+    title={Brain Age Revisited: Investigating the State vs. Trait Hypotheses of EEG-derived Brain-Age Dynamics with Deep Learning},
     author={Gemein, Lukas AW and Schirrmeister, Robin T and Boedecker, Joschka and Ball, Tonio},
     journal={arXiv},
-    pages={},
-    year={},
-    publisher={}
   }
