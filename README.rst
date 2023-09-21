@@ -9,7 +9,7 @@ which is currenty in submission.
 
 Requirements
 ============
-Requirements are specified in *environment.yml*. *versions.txt* contains exact package versions used to run the code.
+Requirements are specified in *environment.yml*. *versions.txt* contains additional versions of packages installed via pip (e.g. PyTorch) used to run the code.
 
 Data
 ====
