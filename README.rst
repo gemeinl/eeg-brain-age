@@ -19,7 +19,7 @@ The corpora are available for download at: https://www.isip.piconepress.com/proj
 Citing
 ======
 
-If you use this code in a scientific publication, please cite us as:
+If you use this code or if you want to refer to our scientific publication, please cite us as:
 
 .. code-block:: bibtex
 
