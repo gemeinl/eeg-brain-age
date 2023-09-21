@@ -13,7 +13,7 @@ Requirements are specified in *environment.yml*. *versions.txt* contains additio
 
 Data
 ====
-Our study is based on the Temple University Hospital EEG Corpus, the Temple University Hospital Abnormal EEG Corpus (v2.0.0), and several novel datasets derived thereof.
+Our study is based on the Temple University Hospital EEG Corpus (v1.2.0), the Temple University Hospital Abnormal EEG Corpus (v2.0.0), and several novel datasets derived thereof.
 The corpora are available for download at: https://www.isip.piconepress.com/projects/tuh_eeg/html/downloads.shtml. Detail on how to create the derivatives can be found in the code database.
 
 Citing
