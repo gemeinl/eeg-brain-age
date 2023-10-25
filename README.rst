@@ -21,11 +21,10 @@ If you use this code in a scientific publication, please cite us as:
 
 .. code-block:: bibtex
 
-  @article{gemein2020machine,
-    title={Revisiting Brain Age Based on Clinical EEG: Investigation of The State And Trait Hypotheses With Deep Learning},
+  @article{gemein2023brain,
+    title={Brain Age Revisited: Investigating the State vs. Trait Hypotheses of EEG-derived Brain-Age Dynamics with Deep Learning},
     author={Gemein, Lukas AW and Schirrmeister, Robin T and Boedecker, Joschka and Ball, Tonio},
-    journal={arXiv},
-    pages={},
-    year={},
-    publisher={}
+    journal={arXiv preprint arXiv:2310.07029},
+    year={2023}
   }
+
