@@ -2185,7 +2185,7 @@ def plot_age_gap_hist_with_thresh_and_permutation_test(
     )
     observed, sampled = accuracy_perumtations(g1, n_repetitions)
     # overwrite 'observation' with just 1 threshold
-    observed_score = balanced_accuracy_score(
+    observed = balanced_accuracy_score(
         g1.pathological, (g1.gap < t_low) | (g1.gap > t_high)) * 100
 
     ax1 = plot_violin_new(observed, sampled, central_value=50, ax1=ax1)
@@ -2636,7 +2636,7 @@ def plot_violin_new(observed, sampled, central_value, ax1):
     #sns.violinplot(y=sampled, ax=ax1, inner='quartile', color='g')
     sns.violinplot(y=sampled, ax=ax1, inner=None, color='g')
     sns.boxplot(
-        y=sampled, showfliers=False, showbox=False, whis=[2.5,97.5], ax=ax1,
+        y=sampled, showfliers=False, showbox=False, whis=[2.5, 97.5], ax=ax1,
         **{
             'boxprops':{'facecolor':'none', 'edgecolor':'g'},
             'medianprops':{'color':'g'},
@@ -2654,10 +2654,10 @@ def plot_violin_new(observed, sampled, central_value, ax1):
     for art in ax1.get_children():
         if isinstance(art, PolyCollection):
             art.set_alpha(.5)
-    p = compute_p_value_from_sampled_and_observed(sampled, observed)
+    p = compute_p_value_from_sampled_and_observed(np.array(sampled)-central_value, observed-central_value)
     print(f"p={p:.2E}")
     ax1.legend([
-        f'Observed ({observed:.2f})',#, p$\leq${p:.2E})',  # TODO: add back p-value?
+        f'Observed ({observed:.2f})',#', p$\leq${p:.2E})',  # TODO: add back p-value?
         'Sampled',
     ], loc='lower center', bbox_to_anchor=(.5, -.3))
     return ax1
@@ -3069,11 +3069,11 @@ def plot_n_recs_per_subject(n_recs_per_subject, ax=None):
     return ax
 
 
-def plot_rec_intervals(df, ax=None):
+def plot_rec_intervals(df, y='Interval [days]', ax=None):
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(7, 3))
     x = 'Dataset'
-    y = 'Interval [days]'
+    #y = 'Interval [days]'
     cs = ['b', 'r', 'purple', 'orange']
     ax = sns.violinplot(
         data=df,
@@ -3097,7 +3097,7 @@ def plot_rec_intervals(df, ax=None):
     #    hue='Dataset', palette=['g', 'b', 'r'],
     #)
     ax.set_ylim(bottom=0, top=365*4)
-    ax.set_ylabel('Recording Interval [days]')
+    ax.set_ylabel(f'Recording {y}')
     #ax.get_legend().remove()
     ax.legend(loc='upper center', ncol=4, bbox_to_anchor=(.5,1.22))
 
