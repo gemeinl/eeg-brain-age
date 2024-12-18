@@ -23,10 +23,12 @@ If you use the code of this repository or if you want to refer to our scientific
 
 .. code-block:: bibtex
 
-  @article{gemein2023brain,
+  @article{gemein2024brain,
     title={Brain Age Revisited: Investigating the State vs. Trait Hypotheses of EEG-derived Brain-Age Dynamics with Deep Learning},
     author={Gemein, Lukas AW and Schirrmeister, Robin T and Boedecker, Joschka and Ball, Tonio},
-    journal={arXiv preprint arXiv:2310.07029},
-    year={2023}
+    journal={Imaging Neuroscience},
+    year={2024},
+    publisher={MIT Press 255 Main Street, 9th Floor, Cambridge, Massachusetts 02142, USA~…}
   }
+
 
